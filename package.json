@@ -1,0 +1,36 @@
+{
+  "name": "tailor-bar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-shell": "^2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.0",
+    "zustand": "^5.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "tailwindcss": "^4",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "packageManager": "pnpm@10.13.0+sha512.e08cbfa5d0c47e148d9d92965513af3d06a42ff99b6e0e82a7d10512858d0fb680a03c1e6772d369a2305c79306c9257989a3576b7057d6877469c9a1c7563f0"
+}

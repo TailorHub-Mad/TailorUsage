@@ -1,0 +1,22 @@
+[package]
+name = "tailor-bar"
+version = "0.1.0"
+description = "Mac menu bar app for Tailor usage metrics"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "tailor_bar_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-shell = "2"
+reqwest = { version = "0.12", features = ["cookies", "rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+url = "2"
