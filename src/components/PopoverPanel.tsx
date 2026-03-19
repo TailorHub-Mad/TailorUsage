@@ -1,5 +1,6 @@
 import { useStore } from "../store";
 import { usePolling } from "../hooks/usePolling";
+import { UsageLimitsBar } from "./UsageLimitsBar";
 import { ProxyToggle } from "./sections/ProxyToggle";
 import { RealtimeSection } from "./sections/RealtimeSection";
 import { TodaySection } from "./sections/TodaySection";
@@ -7,7 +8,7 @@ import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
 
 export function PopoverPanel() {
-  usePolling();
+  const { refresh } = usePolling();
   const { loading, error } = useStore();
 
   return (
@@ -32,6 +33,7 @@ export function PopoverPanel() {
         )}
 
         <div className="flex-1 overflow-y-auto">
+          <UsageLimitsBar />
           <RealtimeSection />
           <Divider />
           <TodaySection />
@@ -42,7 +44,7 @@ export function PopoverPanel() {
         </div>
 
         <div className="border-t border-gray-100">
-          <Footer />
+          <Footer onRefresh={refresh} />
         </div>
       </div>
     </div>

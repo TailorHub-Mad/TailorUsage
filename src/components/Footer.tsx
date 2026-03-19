@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useStore } from "../store";
 import { clearAuthCookie, setPreferences as savePreferences } from "../lib/api";
 import type { Preferences } from "../lib/types";
@@ -8,8 +9,9 @@ const POLL_OPTIONS = [
   { label: "5m", value: 300000 },
 ];
 
-export function Footer() {
+export function Footer({ onRefresh }: { onRefresh?: () => void }) {
   const { preferences, setPreferences, signOut } = useStore();
+  const [spinning, setSpinning] = useState(false);
 
   const updatePrefs = async (update: Partial<Preferences>) => {
     const newPrefs = { ...preferences, ...update };
@@ -20,6 +22,12 @@ export function Footer() {
   const handleSignOut = async () => {
     await clearAuthCookie();
     signOut();
+  };
+
+  const handleRefresh = async () => {
+    setSpinning(true);
+    await onRefresh?.();
+    setTimeout(() => setSpinning(false), 600);
   };
 
   return (
@@ -52,12 +60,41 @@ export function Footer() {
         </button>
       </div>
 
-      <button
-        onClick={handleSignOut}
-        className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
-      >
-        Sign out
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleRefresh}
+          title="Refresh now"
+          className="text-gray-400 hover:text-gray-600 transition-colors"
+          style={{ lineHeight: 1 }}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{
+              transition: "transform 0.6s ease",
+              transform: spinning ? "rotate(360deg)" : "rotate(0deg)",
+            }}
+          >
+            <path d="M21 2v6h-6" />
+            <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+            <path d="M3 22v-6h6" />
+            <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+          </svg>
+        </button>
+        <button
+          onClick={handleSignOut}
+          className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }

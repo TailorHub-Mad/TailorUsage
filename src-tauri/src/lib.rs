@@ -71,7 +71,8 @@ fn clear_auth_cookie(app: AppHandle, state: tauri::State<'_, AppState>) {
 
 #[tauri::command]
 async fn start_auth_flow(app: AppHandle) -> Result<(), String> {
-    let url = "https://ai-usage-dashboard-sage.vercel.app/api/auth/signin/google";
+    // source=tailor tells the dashboard callback to redirect to tailorbar:// instead of the web root
+    let url = "https://ai-usage-dashboard-sage.vercel.app/api/auth/login?source=tailor";
 
     let app_handle = app.clone();
     let _auth_window = WebviewWindowBuilder::new(&app, "auth", WebviewUrl::External(url.parse().unwrap()))
@@ -80,12 +81,33 @@ async fn start_auth_flow(app: AppHandle) -> Result<(), String> {
         .center()
         .visible(true)
         .on_navigation(move |url: &url::Url| {
-            let url_str = url.as_str();
-            // When redirected back to dashboard root, auth is complete
-            if url_str == "https://ai-usage-dashboard-sage.vercel.app/"
-                || url_str == "https://ai-usage-dashboard-sage.vercel.app"
-            {
-                app_handle.emit("auth-success", ()).ok();
+            // After OAuth the dashboard redirects to /tailor-auth?token=<jwt>
+            // Intercept here in Rust before the page loads
+            let is_tailor_auth = url.host_str() == Some("ai-usage-dashboard-sage.vercel.app")
+                && url.path() == "/tailor-auth";
+
+            if is_tailor_auth {
+                let token = url
+                    .query_pairs()
+                    .find(|(k, _)| k == "token")
+                    .map(|(_, v)| v.to_string());
+
+                if let Some(token) = token {
+                    persist_cookie(&app_handle, &token);
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        state.auth.lock().unwrap().cookie = Some(token);
+                    }
+                    app_handle.emit("auth-success", ()).ok();
+                    // Close the auth window off the navigation callback to avoid deadlock
+                    let handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(w) = handle.get_webview_window("auth") {
+                            w.close().ok();
+                        }
+                    });
+                }
+
+                return false; // cancel navigation — /tailor-auth is not a real page
             }
             true
         })

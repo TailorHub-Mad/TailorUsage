@@ -37,6 +37,7 @@ export function usePolling() {
   } = useStore();
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated || !cookie) return;
@@ -67,9 +68,9 @@ export function usePolling() {
           }
         }
 
-        const todayLogs = ((todayRes as { logs?: LogRecord[] })?.logs ??
+        const todayLogs = ((todayRes as { data?: LogRecord[] })?.data ??
           []) as LogRecord[];
-        const weekLogs = ((weekRes as { logs?: LogRecord[] })?.logs ??
+        const weekLogs = ((weekRes as { data?: LogRecord[] })?.data ??
           []) as LogRecord[];
         setTodayLogs(todayLogs);
         setWeekLogs(weekLogs);
@@ -105,6 +106,8 @@ export function usePolling() {
       }
     };
 
+    pollRef.current = poll;
+
     // Initial fetch
     poll();
 
@@ -127,4 +130,8 @@ export function usePolling() {
     setError,
     signOut,
   ]);
+
+  return {
+    refresh: () => pollRef.current?.(),
+  };
 }

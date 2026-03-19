@@ -10,7 +10,7 @@ export function WeekSection() {
 
   const dailyCosts: Record<string, number> = {};
   for (const log of weekLogs) {
-    const date = log.ts.slice(0, 10);
+    const date = String(log.ts).slice(0, 10);
     if (!dailyCosts[date]) dailyCosts[date] = 0;
     const model = log.model.toLowerCase();
     const pricing = model.includes("opus")
