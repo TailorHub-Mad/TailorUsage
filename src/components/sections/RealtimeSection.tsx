@@ -1,11 +1,28 @@
 import { useStore } from "../../store";
 import { formatTokens } from "../../lib/format";
 
-export function RealtimeSection() {
-  const { metrics } = useStore();
+function oneHourAgo(): number {
+  return Date.now() - 60 * 60 * 1000;
+}
 
-  const totalTokens = metrics?.total_tokens_1h ?? 0;
-  const opusTokens = metrics?.opus_tokens_1h ?? 0;
+export function RealtimeSection() {
+  const { todayLogs } = useStore();
+
+  const cutoff = oneHourAgo();
+  const recentLogs = todayLogs.filter((l) => new Date(String(l.ts)).getTime() >= cutoff);
+
+  const totalTokens = recentLogs.reduce(
+    (sum, l) => sum + l.input_tokens + l.output_tokens, 0,
+  );
+
+  const anthropicTokens = recentLogs
+    .filter((l) => !l.provider || l.provider === "anthropic")
+    .reduce((sum, l) => sum + l.input_tokens + l.output_tokens, 0);
+
+  const openaiTokens = recentLogs
+    .filter((l) => l.provider === "openai")
+    .reduce((sum, l) => sum + l.input_tokens + l.output_tokens, 0);
+
   // Treat 100k tokens/hr as "full" for the progress bar
   const MAX_TOKENS = 100_000;
   const pct = Math.min(100, Math.round((totalTokens / MAX_TOKENS) * 100));
@@ -14,7 +31,7 @@ export function RealtimeSection() {
     <div className="px-4 py-4">
       <div className="flex items-center justify-between mb-1">
         <span className="text-base font-bold text-gray-900">This Hour</span>
-        {metrics?.warning_flag && (
+        {pct >= 80 && (
           <span className="text-xs text-amber-500 font-medium">High usage</span>
         )}
       </div>
@@ -29,14 +46,19 @@ export function RealtimeSection() {
       </div>
       <div className="flex justify-between text-xs text-gray-400">
         <span>{formatTokens(totalTokens)} tokens</span>
-        {opusTokens > 0 && (
-          <span className="text-purple-500">{formatTokens(opusTokens)} Opus</span>
-        )}
+        <div className="flex gap-2">
+          {anthropicTokens > 0 && (
+            <span className="text-purple-500">{formatTokens(anthropicTokens)} Claude</span>
+          )}
+          {openaiTokens > 0 && (
+            <span className="text-teal-500">{formatTokens(openaiTokens)} Codex</span>
+          )}
+        </div>
       </div>
 
-      {(metrics?.opus_streak ?? 0) > 0 && (
+      {recentLogs.length > 0 && (
         <div className="mt-2 text-xs text-gray-400">
-          Opus streak: <span className="text-gray-700 font-medium">{metrics!.opus_streak}</span>
+          {recentLogs.length} calls this hour
         </div>
       )}
     </div>

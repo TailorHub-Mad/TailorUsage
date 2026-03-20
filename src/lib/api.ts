@@ -35,6 +35,10 @@ export async function fetchUsage(
   });
 }
 
+export async function readLocalLogs(date: string): Promise<Record<string, unknown>[]> {
+  return invoke("read_local_logs", { date });
+}
+
 export async function setTrayTitle(title: string): Promise<void> {
   return invoke("set_tray_title", { title });
 }
@@ -59,4 +63,16 @@ export async function getPreferences(): Promise<Preferences> {
 
 export async function setPreferences(prefs: Preferences): Promise<void> {
   return invoke("set_preferences", { prefs });
+}
+
+export async function startProxy(): Promise<void> {
+  return invoke("start_proxy");
+}
+
+export async function stopProxy(): Promise<void> {
+  return invoke("stop_proxy");
+}
+
+export async function getProxyEnabled(): Promise<boolean> {
+  return invoke("get_proxy_enabled");
 }

@@ -2,6 +2,29 @@ import { useStore } from "../../store";
 import { formatTokens, formatCost } from "../../lib/format";
 import { calculateCost } from "../../lib/cost";
 
+function getModelLabel(model: string): string {
+  const m = model.toLowerCase();
+  if (m.includes("opus")) return "Opus";
+  if (m.includes("sonnet")) return "Sonnet";
+  if (m.includes("haiku")) return "Haiku";
+  if (m.includes("o4-mini")) return "o4-mini";
+  if (m.includes("o3")) return "o3";
+  if (m.includes("gpt-4o")) return "GPT-4o";
+  return model;
+}
+
+function getModelColor(label: string): string {
+  switch (label) {
+    case "Opus": return "bg-purple-400";
+    case "Sonnet": return "bg-blue-400";
+    case "Haiku": return "bg-emerald-400";
+    case "GPT-4o": return "bg-teal-400";
+    case "o3": return "bg-orange-400";
+    case "o4-mini": return "bg-amber-400";
+    default: return "bg-gray-400";
+  }
+}
+
 export function TodaySection() {
   const { todayLogs } = useStore();
 
@@ -15,13 +38,9 @@ export function TodaySection() {
   // Model breakdown
   const modelTokens: Record<string, number> = {};
   for (const log of todayLogs) {
-    const model = log.model.toLowerCase().includes("opus")
-      ? "Opus"
-      : log.model.toLowerCase().includes("haiku")
-        ? "Haiku"
-        : "Sonnet";
-    modelTokens[model] =
-      (modelTokens[model] || 0) + log.input_tokens + log.output_tokens;
+    const label = getModelLabel(log.model);
+    modelTokens[label] =
+      (modelTokens[label] || 0) + log.input_tokens + log.output_tokens;
   }
 
   const models = Object.entries(modelTokens)
@@ -52,13 +71,7 @@ export function TodaySection() {
           </div>
           <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full ${
-                m.name === "Opus"
-                  ? "bg-purple-400"
-                  : m.name === "Haiku"
-                    ? "bg-emerald-400"
-                    : "bg-blue-400"
-              }`}
+              className={`h-full rounded-full ${getModelColor(m.name)}`}
               style={{ width: `${m.pct}%` }}
             />
           </div>

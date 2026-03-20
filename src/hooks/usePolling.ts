@@ -3,7 +3,8 @@ import { useStore } from "../store";
 import {
   fetchMetrics,
   fetchUsage,
-  checkProxyRunning,
+  readLocalLogs,
+  getProxyEnabled,
   getProxySettings,
   setTrayTitle,
   clearAuthCookie,
@@ -36,53 +37,28 @@ export function usePolling() {
     signOut,
   } = useStore();
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const slowIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fastIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<(() => Promise<void>) | null>(null);
+  // Current user's developer_id — derived from local logs (most reliable source)
+  const myIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated || !cookie) return;
 
-    const poll = async () => {
+    // Fast poll: read today's logs directly from the local proxy JSONL file
+    const pollLocalLogs = async () => {
       try {
-        setLoading(true);
-        setError(null);
+        const raw = await readLocalLogs(todayStr());
+        const todayLogs = raw as unknown as LogRecord[];
+        setTodayLogs(todayLogs);
 
-        const [metricsRes, todayRes, weekRes, proxyRunning, proxySettings] =
-          await Promise.all([
-            fetchMetrics(cookie).catch((e: Error) => {
-              if (e.message === "unauthorized") throw e;
-              return null;
-            }),
-            fetchUsage(cookie, todayStr(), todayStr()).catch(() => null),
-            fetchUsage(cookie, weekAgoStr(), todayStr()).catch(() => null),
-            checkProxyRunning().catch(() => false),
-            getProxySettings().catch(() => ({ share_diagnostics: false })),
-          ]);
-
-        if (metricsRes) {
-          // Extract first developer's metrics (personal use)
-          const metricsArr = (metricsRes as { metrics?: DeveloperMetrics[] })
-            .metrics;
-          if (metricsArr && metricsArr.length > 0) {
-            setMetrics(metricsArr[0]);
-          }
+        // Derive current user's developer_id from local logs
+        if (todayLogs.length > 0) {
+          myIdRef.current = todayLogs[0].developer_id;
         }
 
-        const todayLogs = ((todayRes as { data?: LogRecord[] })?.data ??
-          []) as LogRecord[];
-        const weekLogs = ((weekRes as { data?: LogRecord[] })?.data ??
-          []) as LogRecord[];
-        setTodayLogs(todayLogs);
-        setWeekLogs(weekLogs);
-
-        setProxyStatus({
-          running: proxyRunning as boolean,
-          shareDiagnostics:
-            (proxySettings as { share_diagnostics?: boolean })
-              .share_diagnostics ?? false,
-        });
-
-        // Update tray title
+        // Keep tray title in sync
         const cost = calculateCost(todayLogs);
         const totalTokens = todayLogs.reduce(
           (sum, l) => sum + l.input_tokens + l.output_tokens,
@@ -93,6 +69,59 @@ export function usePolling() {
             ? formatCost(cost)
             : formatTokens(totalTokens);
         setTrayTitle(title);
+      } catch {
+        // local log read failure is non-fatal — fall back to API data
+      }
+    };
+
+    // Slow poll: fetch week history + proxy status from the API
+    const pollApi = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const [metricsRes, weekRes, proxyEnabled, proxySettings] =
+          await Promise.all([
+            fetchMetrics(cookie).catch((e: Error) => {
+              if (e.message === "unauthorized") throw e;
+              return null;
+            }),
+            fetchUsage(cookie, weekAgoStr(), todayStr()).catch(() => null),
+            getProxyEnabled().catch(() => null),
+            getProxySettings().catch(() => ({ share_diagnostics: false })),
+          ]);
+
+        if (metricsRes) {
+          const metricsArr = (metricsRes as { metrics?: DeveloperMetrics[] })
+            .metrics;
+          if (metricsArr && metricsArr.length > 0) {
+            setMetrics(metricsArr[0]);
+            // Fall back to metrics for developer_id if local logs are empty
+            if (!myIdRef.current) {
+              myIdRef.current = metricsArr[0].developer_id;
+            }
+          }
+        }
+
+        const allWeekLogs = ((weekRes as { data?: LogRecord[] })?.data ??
+          []) as LogRecord[];
+
+        // Filter to current user's logs only
+        const weekLogs = myIdRef.current
+          ? allWeekLogs.filter((l) => l.developer_id === myIdRef.current)
+          : allWeekLogs;
+        setWeekLogs(weekLogs);
+
+        // Only update proxy status if the IPC call succeeded (null = failed, preserve existing state)
+        if (proxyEnabled !== null) {
+          setProxyStatus({
+            running: proxyEnabled as boolean,
+            enabled: proxyEnabled as boolean,
+            shareDiagnostics:
+              (proxySettings as { share_diagnostics?: boolean })
+                .share_diagnostics ?? false,
+          });
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg === "unauthorized") {
@@ -106,16 +135,23 @@ export function usePolling() {
       }
     };
 
+    const poll = async () => {
+      await Promise.all([pollLocalLogs(), pollApi()]);
+    };
+
     pollRef.current = poll;
 
-    // Initial fetch
     poll();
 
-    // Set up interval
-    intervalRef.current = setInterval(poll, preferences.poll_interval);
+    // Fast: re-read local log file every 5 seconds
+    fastIntervalRef.current = setInterval(pollLocalLogs, 5000);
+
+    // Slow: re-fetch API (week history, proxy status) at user-configured interval
+    slowIntervalRef.current = setInterval(pollApi, preferences.poll_interval);
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (fastIntervalRef.current) clearInterval(fastIntervalRef.current);
+      if (slowIntervalRef.current) clearInterval(slowIntervalRef.current);
     };
   }, [
     isAuthenticated,

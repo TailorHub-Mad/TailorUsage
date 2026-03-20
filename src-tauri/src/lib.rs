@@ -1,3 +1,5 @@
+mod proxy;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::TcpStream;
@@ -22,6 +24,8 @@ struct AppState {
     last_shown: Mutex<Option<Instant>>,
     /// Keep tray icon alive for the lifetime of the app
     _tray: TrayIcon,
+    /// Running proxy handle
+    proxy: Mutex<Option<proxy::ProxyHandle>>,
 }
 
 // --- Auth persistence ---
@@ -163,6 +167,21 @@ async fn fetch_usage(
 }
 
 #[tauri::command]
+fn read_local_logs(date: String) -> Vec<serde_json::Value> {
+    let Some(home) = dirs_next() else { return vec![] };
+    let path = home
+        .join(".anthropic-proxy")
+        .join("logs")
+        .join(format!("{}.jsonl", date));
+    let Ok(content) = fs::read_to_string(&path) else { return vec![] };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+#[tauri::command]
 fn set_tray_title(app: AppHandle, title: String) {
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_title(Some(&title)).ok();
@@ -256,6 +275,70 @@ fn set_preferences(app: AppHandle, prefs: serde_json::Value) -> Result<(), Strin
     Ok(())
 }
 
+// --- Proxy lifecycle commands ---
+
+#[tauri::command]
+async fn start_proxy(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut guard = state.proxy.lock().unwrap();
+    if guard.is_some() {
+        return Err("Proxy is already running".to_string());
+    }
+
+    let config = proxy::types::ProxyConfig::default();
+    let handle = proxy::start(config)?;
+    *guard = Some(handle);
+
+    // Persist preference
+    set_proxy_enabled_pref(&app, true);
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_proxy(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let handle = {
+        let mut guard = state.proxy.lock().unwrap();
+        guard.take()
+    };
+
+    if let Some(h) = handle {
+        h.stop();
+    }
+
+    proxy::cleanup_config();
+
+    // Persist preference
+    set_proxy_enabled_pref(&app, false);
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_proxy_enabled(state: tauri::State<'_, AppState>) -> bool {
+    state.proxy.lock().unwrap().is_some()
+}
+
+fn proxy_enabled_pref_path(app: &AppHandle) -> PathBuf {
+    let dir = app.path().app_data_dir().expect("app data dir");
+    fs::create_dir_all(&dir).ok();
+    dir.join("proxy_enabled.json")
+}
+
+fn set_proxy_enabled_pref(app: &AppHandle, enabled: bool) {
+    let path = proxy_enabled_pref_path(app);
+    let data = serde_json::json!({ "enabled": enabled });
+    fs::write(path, data.to_string()).ok();
+}
+
+fn load_proxy_enabled_pref(app: &AppHandle) -> bool {
+    let path = proxy_enabled_pref_path(app);
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|v| v.get("enabled")?.as_bool())
+        .unwrap_or(false)
+}
+
 // --- App Setup ---
 
 fn toggle_popover(app: &AppHandle) {
@@ -293,9 +376,8 @@ pub fn run() {
                 .build()?;
 
             let tray = TrayIconBuilder::with_id("main")
-                .icon(Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                .icon(Image::from_bytes(include_bytes!("../icons/new-icon.png"))
                     .expect("tray icon"))
-                .icon_as_template(true)
                 .title("--")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -314,6 +396,19 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Auto-start proxy if it was enabled before
+            let proxy_handle = if load_proxy_enabled_pref(app.handle()) {
+                match proxy::start(proxy::types::ProxyConfig::default()) {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        log::warn!("Failed to auto-start proxy: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             // Store everything in managed state (keeps tray alive)
             app.manage(AppState {
                 auth: Mutex::new(AuthState {
@@ -321,6 +416,7 @@ pub fn run() {
                 }),
                 last_shown: Mutex::new(None::<Instant>),
                 _tray: tray,
+                proxy: Mutex::new(proxy_handle),
             });
 
             // Create the hidden popover window
@@ -368,19 +464,36 @@ pub fn run() {
             start_auth_flow,
             fetch_metrics,
             fetch_usage,
+            read_local_logs,
             set_tray_title,
             check_proxy_running,
             get_proxy_settings,
             set_proxy_settings,
             get_preferences,
             set_preferences,
+            start_proxy,
+            stop_proxy,
+            get_proxy_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app_handle, event| {
-            // Keep the process (and tray icon) alive when all windows are hidden
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+        .run(|app_handle, event| {
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    // Keep the process (and tray icon) alive when all windows are hidden
+                    api.prevent_exit();
+                }
+                tauri::RunEvent::Exit => {
+                    // Gracefully stop proxy on app exit
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let handle = state.proxy.lock().unwrap().take();
+                        if let Some(h) = handle {
+                            // Best-effort shutdown — send signal but don't block on join
+                            let _ = h;
+                        }
+                    }
+                }
+                _ => {}
             }
         });
 }

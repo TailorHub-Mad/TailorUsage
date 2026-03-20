@@ -3,6 +3,7 @@ export interface LogRecord {
   request_id: string;
   developer_id: string;
   repo: string;
+  provider?: "anthropic" | "openai";
   model: string;
   status: number;
   latency_ms: number;
@@ -22,6 +23,7 @@ export interface DeveloperMetrics {
 
 export interface ProxyStatus {
   running: boolean;
+  enabled: boolean;
   shareDiagnostics: boolean;
 }
 
