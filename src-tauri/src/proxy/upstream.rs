@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response};
+use reqwest::header::{AUTHORIZATION, HeaderValue};
 use std::time::Instant;
 
 use crate::proxy::logger;
@@ -132,6 +133,15 @@ pub async fn forward(
         if let Ok(n) = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()) {
             if let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
                 upstream_headers.insert(n, v);
+            }
+        }
+    }
+
+    if provider == Provider::Openai {
+        if let Some(api_key) = logger::read_openai_api_key() {
+            let auth_value = format!("Bearer {}", api_key);
+            if let Ok(value) = HeaderValue::from_str(&auth_value) {
+                upstream_headers.insert(AUTHORIZATION, value);
             }
         }
     }

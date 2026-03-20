@@ -91,9 +91,11 @@ function normalizeTimestamp(source: unknown): string | number {
   );
 }
 
-function logTime(value: string | number): number {
+export function logTime(value: string | number): number {
   const numeric = typeof value === "number" ? value : Number(value);
-  if (Number.isFinite(numeric)) return numeric;
+  if (Number.isFinite(numeric)) {
+    return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+  }
 
   const parsed = new Date(String(value)).getTime();
   return Number.isFinite(parsed) ? parsed : 0;

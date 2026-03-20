@@ -1,5 +1,6 @@
 import { useStore } from "../../store";
 import { formatTokens } from "../../lib/format";
+import { logTime } from "../../lib/logs";
 
 function oneHourAgo(): number {
   return Date.now() - 60 * 60 * 1000;
@@ -9,7 +10,7 @@ export function RealtimeSection() {
   const { todayLogs } = useStore();
 
   const cutoff = oneHourAgo();
-  const recentLogs = todayLogs.filter((l) => new Date(String(l.ts)).getTime() >= cutoff);
+  const recentLogs = todayLogs.filter((l) => logTime(l.ts) >= cutoff);
 
   const totalTokens = recentLogs.reduce(
     (sum, l) => sum + l.input_tokens + l.output_tokens, 0,

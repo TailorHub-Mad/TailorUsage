@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { latestLogForProvider, normalizeLogRecord, normalizeLogRecords } from "./logs";
+import { latestLogForProvider, logTime, normalizeLogRecord, normalizeLogRecords } from "./logs";
 
 describe("normalizeLogRecord", () => {
   it("normalizes nested log payloads from mixed providers", () => {
@@ -100,5 +100,13 @@ describe("latestLogForProvider", () => {
     expect(latestLogForProvider(logs)?.model).toBe("gpt-4o");
     expect(latestLogForProvider(logs, "anthropic")?.model).toBe("claude-opus-4");
     expect(latestLogForProvider([], "openai")).toBeNull();
+  });
+});
+
+describe("logTime", () => {
+  it("normalizes epoch seconds to milliseconds", () => {
+    expect(logTime(1_742_464_800)).toBe(1_742_464_800_000);
+    expect(logTime("1742464800")).toBe(1_742_464_800_000);
+    expect(logTime(1_742_464_800_000)).toBe(1_742_464_800_000);
   });
 });

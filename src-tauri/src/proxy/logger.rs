@@ -19,19 +19,50 @@ fn settings_path() -> Option<PathBuf> {
     )
 }
 
+fn credentials_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join(".anthropic-proxy")
+            .join("credentials.json"),
+    )
+}
+
+fn read_json_file(path: PathBuf) -> Option<serde_json::Value> {
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<serde_json::Value>(&data).ok()
+}
+
 pub fn read_share_diagnostics() -> bool {
     let Some(path) = settings_path() else {
         return false;
     };
-    let Ok(data) = fs::read_to_string(&path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else {
+    let Some(v) = read_json_file(path) else {
         return false;
     };
     v.get("share_diagnostics")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+pub fn read_openai_api_key() -> Option<String> {
+    std::env::var("TAILOR_OPENAI_API_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .or_else(|| {
+            let path = credentials_path()?;
+            let value = read_json_file(path)?;
+            value
+                .get("openai_api_key")
+                .and_then(|v| v.as_str())
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
 }
 
 pub fn append_log(entry: &LogEntry) {
