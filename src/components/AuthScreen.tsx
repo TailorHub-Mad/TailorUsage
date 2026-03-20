@@ -27,7 +27,7 @@ export function AuthScreen() {
         className="flex-1 bg-white rounded-2xl flex flex-col items-center justify-center px-6"
         style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10)" }}
       >
-        <div className="text-xl font-bold mb-1 text-gray-900">Tailor Bar</div>
+        <div className="text-xl font-bold mb-1 text-gray-900">TailorUsage</div>
         <p className="text-gray-400 text-sm mb-8 text-center">
           Connect to your AI usage dashboard
         </p>

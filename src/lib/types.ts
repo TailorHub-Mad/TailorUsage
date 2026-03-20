@@ -1,15 +1,19 @@
 export interface LogRecord {
-  ts: string;
+  ts: string | number;
   request_id: string;
   developer_id: string;
   repo: string;
   provider?: "anthropic" | "openai";
+  endpoint?: string;
   model: string;
+  stream?: boolean;
   status: number;
   latency_ms: number;
   input_tokens: number;
   output_tokens: number;
   stop_reason: string;
+  error_message?: string;
+  share_diagnostics?: boolean;
 }
 
 export interface DeveloperMetrics {

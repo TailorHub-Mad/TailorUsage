@@ -7,6 +7,102 @@ use crate::proxy::logger;
 use crate::proxy::sse_parser;
 use crate::proxy::types::{LogEntry, Provider, StreamAccumulator};
 
+fn normalize_upstream_path(provider: Provider, uri: &hyper::Uri) -> String {
+    let path_and_query = uri
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or_else(|| uri.path());
+
+    match provider {
+        Provider::Anthropic => path_and_query.to_string(),
+        Provider::Openai => {
+            if path_and_query == "/v1" || path_and_query.starts_with("/v1/") {
+                path_and_query.to_string()
+            } else if let Some((path, query)) = path_and_query.split_once('?') {
+                format!("/v1{}?{}", path, query)
+            } else {
+                format!("/v1{}", path_and_query)
+            }
+        }
+    }
+}
+
+fn extract_openai_response_fields(v: &serde_json::Value, acc: &mut StreamAccumulator) {
+    acc.model = v
+        .get("model")
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            v.get("response")
+                .and_then(|r| r.get("model"))
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_string())
+        });
+
+    if let Some(usage) = v.get("usage") {
+        acc.input_tokens = usage
+            .get("prompt_tokens")
+            .or_else(|| usage.get("input_tokens"))
+            .and_then(|t| t.as_u64());
+        acc.output_tokens = usage
+            .get("completion_tokens")
+            .or_else(|| usage.get("output_tokens"))
+            .and_then(|t| t.as_u64());
+    }
+
+    if acc.input_tokens.is_none() || acc.output_tokens.is_none() {
+        if let Some(usage) = v.get("response").and_then(|r| r.get("usage")) {
+            if acc.input_tokens.is_none() {
+                acc.input_tokens = usage.get("input_tokens").and_then(|t| t.as_u64());
+            }
+            if acc.output_tokens.is_none() {
+                acc.output_tokens = usage.get("output_tokens").and_then(|t| t.as_u64());
+            }
+        }
+    }
+
+    acc.stop_reason = v
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|first| first.get("finish_reason"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            v.get("response")
+                .and_then(|r| r.get("status"))
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        });
+}
+
+fn extract_error_message(resp_bytes: &Bytes) -> Option<String> {
+    let text = String::from_utf8_lossy(resp_bytes).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(resp_bytes) {
+        if let Some(message) = v
+            .get("error")
+            .and_then(|error| error.get("message").or_else(|| error.get("error")))
+            .and_then(|value| value.as_str())
+        {
+            return Some(message.trim().chars().take(240).collect());
+        }
+
+        if let Some(message) = v.get("error").and_then(|value| value.as_str()) {
+            return Some(message.trim().chars().take(240).collect());
+        }
+
+        if let Some(message) = v.get("message").and_then(|value| value.as_str()) {
+            return Some(message.trim().chars().take(240).collect());
+        }
+    }
+
+    Some(text.chars().take(240).collect())
+}
+
 /// Headers that must NOT be logged (but ARE forwarded to upstream).
 #[allow(dead_code)]
 const SENSITIVE_HEADERS: &[&str] = &["authorization", "x-api-key", "cookie"];
@@ -18,7 +114,12 @@ pub async fn forward(
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let start = Instant::now();
     let method = req.method().clone();
-    let uri_path = req.uri().path().to_string();
+    let raw_uri_path = req
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| req.uri().path().to_string());
+    let upstream_path = normalize_upstream_path(provider, req.uri());
 
     // Collect headers for upstream (keep sensitive ones for the real request)
     let mut upstream_headers = reqwest::header::HeaderMap::new();
@@ -75,7 +176,7 @@ pub async fn forward(
     };
 
     // Build upstream URL
-    let upstream_url = format!("{}{}", provider.upstream_host(), uri_path);
+    let upstream_url = format!("{}{}", provider.upstream_host(), upstream_path);
 
     // Forward via reqwest
     let client = reqwest::Client::new();
@@ -104,6 +205,11 @@ pub async fn forward(
     };
 
     let latency_ms = start.elapsed().as_millis() as u64;
+    let error_message = if status >= 400 {
+        extract_error_message(&resp_bytes)
+    } else {
+        None
+    };
 
     // Parse response for token counts
     let mut acc = StreamAccumulator::default();
@@ -124,16 +230,7 @@ pub async fn forward(
                     acc.stop_reason = v.get("stop_reason").and_then(|s| s.as_str()).map(|s| s.to_string());
                 }
                 Provider::Openai => {
-                    acc.model = v.get("model").and_then(|m| m.as_str()).map(|s| s.to_string());
-                    if let Some(usage) = v.get("usage") {
-                        acc.input_tokens = usage.get("prompt_tokens").and_then(|t| t.as_u64());
-                        acc.output_tokens = usage.get("completion_tokens").and_then(|t| t.as_u64());
-                    }
-                    if let Some(choices) = v.get("choices").and_then(|c| c.as_array()) {
-                        if let Some(first) = choices.first() {
-                            acc.stop_reason = first.get("finish_reason").and_then(|s| s.as_str()).map(|s| s.to_string());
-                        }
-                    }
+                    extract_openai_response_fields(&v, &mut acc);
                 }
             }
         }
@@ -150,7 +247,7 @@ pub async fn forward(
         developer_id: logger::get_developer_id(),
         repo: logger::get_repo_name(),
         provider,
-        endpoint: uri_path,
+        endpoint: raw_uri_path,
         model,
         stream: is_stream,
         status,
@@ -158,6 +255,7 @@ pub async fn forward(
         input_tokens: acc.input_tokens.unwrap_or(0),
         output_tokens: acc.output_tokens.unwrap_or(0),
         stop_reason: acc.stop_reason.unwrap_or_default(),
+        error_message,
         share_diagnostics: logger::read_share_diagnostics(),
     };
 

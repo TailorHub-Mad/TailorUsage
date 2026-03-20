@@ -1,6 +1,7 @@
 import { useStore } from "../../store";
 import { formatTokens, formatCost } from "../../lib/format";
 import { calculateCost } from "../../lib/cost";
+import { latestLogForProvider } from "../../lib/logs";
 
 function getModelLabel(model: string): string {
   const m = model.toLowerCase();
@@ -44,12 +45,21 @@ export function TodaySection() {
   }
 
   const models = Object.entries(modelTokens)
+    .filter(([name, tokens]) => name.trim().length > 0 || tokens > 0)
     .sort(([, a], [, b]) => b - a)
     .map(([name, tokens]) => ({
       name,
       tokens,
       pct: totalTokens > 0 ? Math.round((tokens / totalTokens) * 100) : 0,
+      pctLabel:
+        totalTokens > 0 && tokens > 0 && (tokens / totalTokens) * 100 < 1
+          ? "<1%"
+          : `${totalTokens > 0 ? Math.round((tokens / totalTokens) * 100) : 0}%`,
     }));
+
+  const latestLog = latestLogForProvider(todayLogs);
+
+  const currentModelLabel = latestLog ? getModelLabel(latestLog.model) : null;
 
   return (
     <div className="px-4 py-4">
@@ -66,8 +76,15 @@ export function TodaySection() {
       {models.map((m) => (
         <div key={m.name} className="mb-2">
           <div className="flex justify-between text-xs text-gray-500 mb-1">
-            <span>{m.name}</span>
-            <span>{m.pct}%</span>
+            <span className="flex items-center gap-1.5">
+              <span>{m.name}</span>
+              {currentModelLabel === m.name && (
+                <span className="rounded-full bg-teal-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-teal-600">
+                  Current
+                </span>
+              )}
+            </span>
+            <span>{m.pctLabel}</span>
           </div>
           <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div

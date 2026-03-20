@@ -29,7 +29,8 @@ pub fn parse_anthropic_event(event_type: &str, data: &str, acc: &mut StreamAccum
                     acc.output_tokens = Some(output);
                 }
             }
-            if let Some(stop) = v.get("delta")
+            if let Some(stop) = v
+                .get("delta")
                 .and_then(|d| d.get("stop_reason"))
                 .and_then(|s| s.as_str())
             {
@@ -59,6 +60,12 @@ pub fn parse_openai_chunk(data: &str, acc: &mut StreamAccumulator) {
     if acc.model.is_none() {
         if let Some(model) = v.get("model").and_then(|m| m.as_str()) {
             acc.model = Some(model.to_string());
+        } else if let Some(model) = v
+            .get("response")
+            .and_then(|r| r.get("model"))
+            .and_then(|m| m.as_str())
+        {
+            acc.model = Some(model.to_string());
         }
     }
 
@@ -80,6 +87,19 @@ pub fn parse_openai_chunk(data: &str, acc: &mut StreamAccumulator) {
             if let Some(completion) = usage.get("completion_tokens").and_then(|t| t.as_u64()) {
                 acc.output_tokens = Some(completion);
             }
+        }
+    }
+
+    if let Some(usage) = v
+        .get("response")
+        .and_then(|r| r.get("usage"))
+        .filter(|u| !u.is_null())
+    {
+        if let Some(input) = usage.get("input_tokens").and_then(|t| t.as_u64()) {
+            acc.input_tokens = Some(input);
+        }
+        if let Some(output) = usage.get("output_tokens").and_then(|t| t.as_u64()) {
+            acc.output_tokens = Some(output);
         }
     }
 }

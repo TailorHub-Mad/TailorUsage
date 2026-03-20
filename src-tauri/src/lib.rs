@@ -372,7 +372,7 @@ pub fn run() {
 
             // A right-click menu keeps the NSStatusItem stable on macOS Sequoia+
             let menu = tauri::menu::MenuBuilder::new(app)
-                .text("quit", "Quit Tailor Bar")
+                .text("quit", "Quit TailorUsage")
                 .build()?;
 
             let tray = TrayIconBuilder::with_id("main")
@@ -425,7 +425,7 @@ pub fn run() {
                 "main",
                 WebviewUrl::default(),
             )
-            .title("Tailor Bar")
+            .title("TailorUsage")
             .inner_size(380.0, 520.0)
             .decorations(false)
             .transparent(true)

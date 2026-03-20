@@ -1,16 +1,21 @@
 use std::fs;
 use std::path::PathBuf;
 
-const SENTINEL_START: &str = "# --- Tailor Bar Proxy (managed) ---";
-const SENTINEL_END: &str = "# --- End Tailor Bar Proxy ---";
+const SENTINEL_START: &str = "# --- TailorUsage Proxy (managed) ---";
+const SENTINEL_END: &str = "# --- End TailorUsage Proxy ---";
+const LEGACY_SENTINEL_START: &str = "# --- Tailor Bar Proxy (managed) ---";
+const LEGACY_SENTINEL_END: &str = "# --- End Tailor Bar Proxy ---";
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
 }
 
 fn proxy_block(anthropic_port: u16, openai_port: u16) -> String {
+    // OPENAI_BASE_URL must include /v1 — the OpenAI SDK and OpenCode append
+    // only the resource path (e.g. /chat/completions) to this value.
+    // ANTHROPIC_BASE_URL does NOT include /v1 — the Anthropic SDK adds it.
     format!(
-        "{}\nexport ANTHROPIC_BASE_URL=\"http://127.0.0.1:{}\"\nexport OPENAI_BASE_URL=\"http://127.0.0.1:{}\"\n{}",
+        "{}\nexport ANTHROPIC_BASE_URL=\"http://127.0.0.1:{}\"\nexport OPENAI_BASE_URL=\"http://127.0.0.1:{}/v1\"\n{}",
         SENTINEL_START, anthropic_port, openai_port, SENTINEL_END
     )
 }
@@ -21,11 +26,11 @@ fn remove_sentinel_block(content: &str) -> String {
     let mut inside_block = false;
 
     for line in content.lines() {
-        if line.trim() == SENTINEL_START {
+        if line.trim() == SENTINEL_START || line.trim() == LEGACY_SENTINEL_START {
             inside_block = true;
             continue;
         }
-        if line.trim() == SENTINEL_END {
+        if line.trim() == SENTINEL_END || line.trim() == LEGACY_SENTINEL_END {
             inside_block = false;
             continue;
         }
@@ -48,13 +53,15 @@ pub fn enable_shell_profiles(anthropic_port: u16, openai_port: u16) -> Result<()
     let home = home_dir().ok_or("Cannot determine home directory")?;
     let block = proxy_block(anthropic_port, openai_port);
 
-    let profiles = vec![
-        home.join(".zshrc"),
-        home.join(".bashrc"),
-    ];
+    let profiles = vec![home.join(".zshrc"), home.join(".bashrc")];
 
     for profile_path in profiles {
-        if !profile_path.exists() && profile_path.file_name().map(|n| n == ".bashrc").unwrap_or(false) {
+        if !profile_path.exists()
+            && profile_path
+                .file_name()
+                .map(|n| n == ".bashrc")
+                .unwrap_or(false)
+        {
             // Only write .bashrc if it already exists
             continue;
         }
@@ -69,9 +76,8 @@ pub fn enable_shell_profiles(anthropic_port: u16, openai_port: u16) -> Result<()
         };
 
         let new_content = format!("{}\n{}\n", cleaned.trim_end(), block);
-        fs::write(&profile_path, new_content).map_err(|e| {
-            format!("Failed to write {}: {}", profile_path.display(), e)
-        })?;
+        fs::write(&profile_path, new_content)
+            .map_err(|e| format!("Failed to write {}: {}", profile_path.display(), e))?;
     }
 
     Ok(())
@@ -81,10 +87,7 @@ pub fn enable_shell_profiles(anthropic_port: u16, openai_port: u16) -> Result<()
 pub fn disable_shell_profiles() -> Result<(), String> {
     let home = home_dir().ok_or("Cannot determine home directory")?;
 
-    let profiles = vec![
-        home.join(".zshrc"),
-        home.join(".bashrc"),
-    ];
+    let profiles = vec![home.join(".zshrc"), home.join(".bashrc")];
 
     for profile_path in profiles {
         if !profile_path.exists() {
@@ -97,9 +100,8 @@ pub fn disable_shell_profiles() -> Result<(), String> {
         }
 
         let cleaned = remove_sentinel_block(&existing);
-        fs::write(&profile_path, cleaned).map_err(|e| {
-            format!("Failed to write {}: {}", profile_path.display(), e)
-        })?;
+        fs::write(&profile_path, cleaned)
+            .map_err(|e| format!("Failed to write {}: {}", profile_path.display(), e))?;
     }
 
     Ok(())
@@ -117,7 +119,8 @@ pub fn enable_claude_config(port: u16) -> Result<(), String> {
         serde_json::json!({})
     };
 
-    config.as_object_mut()
+    config
+        .as_object_mut()
         .ok_or("Invalid claude.json format")?
         .insert(
             "apiBaseUrl".to_string(),

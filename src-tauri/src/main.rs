@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    tailor_bar_lib::run()
+    tailor_usage_lib::run()
 }

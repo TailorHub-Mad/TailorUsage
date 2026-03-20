@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicoverali/tauri-v2-schema/refs/heads/main/schema.json",
-  "productName": "Tailor Bar",
+  "productName": "TailorUsage",
   "version": "0.1.0",
   "identifier": "com.tailor-hub.tailor-bar",
   "build": {

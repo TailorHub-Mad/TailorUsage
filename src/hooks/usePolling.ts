@@ -11,7 +11,27 @@ import {
 } from "../lib/api";
 import { calculateCost } from "../lib/cost";
 import { formatCost, formatTokens } from "../lib/format";
+import { normalizeLogRecords } from "../lib/logs";
 import type { LogRecord, DeveloperMetrics } from "../lib/types";
+
+function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof Error
+    ? error.message === "unauthorized"
+    : String(error) === "unauthorized";
+}
+
+async function fetchMetricsWithRetry(cookie: string) {
+  try {
+    return await fetchMetrics(cookie);
+  } catch (error) {
+    if (!isUnauthorizedError(error)) {
+      throw error;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    return fetchMetrics(cookie);
+  }
+}
 
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
@@ -50,7 +70,7 @@ export function usePolling() {
     const pollLocalLogs = async () => {
       try {
         const raw = await readLocalLogs(todayStr());
-        const todayLogs = raw as unknown as LogRecord[];
+        const todayLogs = normalizeLogRecords(raw);
         setTodayLogs(todayLogs);
 
         // Derive current user's developer_id from local logs
@@ -82,8 +102,8 @@ export function usePolling() {
 
         const [metricsRes, weekRes, proxyEnabled, proxySettings] =
           await Promise.all([
-            fetchMetrics(cookie).catch((e: Error) => {
-              if (e.message === "unauthorized") throw e;
+            fetchMetricsWithRetry(cookie).catch((e: unknown) => {
+              if (isUnauthorizedError(e)) throw e;
               return null;
             }),
             fetchUsage(cookie, weekAgoStr(), todayStr()).catch(() => null),
@@ -105,11 +125,12 @@ export function usePolling() {
 
         const allWeekLogs = ((weekRes as { data?: LogRecord[] })?.data ??
           []) as LogRecord[];
+        const normalizedWeekLogs = normalizeLogRecords(allWeekLogs as unknown[]);
 
         // Filter to current user's logs only
         const weekLogs = myIdRef.current
-          ? allWeekLogs.filter((l) => l.developer_id === myIdRef.current)
-          : allWeekLogs;
+          ? normalizedWeekLogs.filter((l) => l.developer_id === myIdRef.current)
+          : normalizedWeekLogs;
         setWeekLogs(weekLogs);
 
         // Only update proxy status if the IPC call succeeded (null = failed, preserve existing state)
