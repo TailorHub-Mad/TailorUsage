@@ -29,6 +29,15 @@ function resetStore() {
   });
 }
 
+function isoDate(offsetDays = 0): string {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 describe("usePolling", () => {
   beforeEach(() => {
     resetStore();
@@ -36,16 +45,26 @@ describe("usePolling", () => {
   });
 
   it("hydrates dashboard state from local logs and API data", async () => {
-    apiMocks.readLocalLogs.mockResolvedValue([
-      {
-        ts: "2026-03-20T10:00:00.000Z",
-        developer_id: "dev-a",
-        repo: "tailor-bar",
-        model: "claude-sonnet-4",
-        input_tokens: 1000,
-        output_tokens: 500,
-      },
-    ]);
+    const today = isoDate(0);
+    const yesterday = isoDate(-1);
+
+    apiMocks.readLocalLogs.mockImplementation(async (date: string) => {
+      if (date === today) {
+        return [
+          {
+            ts: `${today}T10:00:00.000Z`,
+            request_id: "local-today-1",
+            developer_id: "dev-a",
+            repo: "tailor-bar",
+            model: "claude-sonnet-4",
+            input_tokens: 1000,
+            output_tokens: 500,
+          },
+        ];
+      }
+
+      return [];
+    });
     apiMocks.fetchMetrics.mockResolvedValue({
       metrics: [
         {
@@ -53,7 +72,7 @@ describe("usePolling", () => {
           total_tokens_1h: 1500,
           opus_tokens_1h: 0,
           opus_streak: 0,
-          last_updated: "2026-03-20T10:00:00.000Z",
+          last_updated: `${today}T10:00:00.000Z`,
           warning_flag: false,
         },
       ],
@@ -65,7 +84,8 @@ describe("usePolling", () => {
             resolve({
               data: [
                 {
-                  ts: "2026-03-19T10:00:00.000Z",
+                  ts: `${yesterday}T10:00:00.000Z`,
+                  request_id: "remote-yesterday-1",
                   developer_id: "dev-a",
                   repo: "tailor-bar",
                   model: "claude-sonnet-4",
@@ -73,7 +93,8 @@ describe("usePolling", () => {
                   output_tokens: 100,
                 },
                 {
-                  ts: "2026-03-19T11:00:00.000Z",
+                  ts: `${yesterday}T11:00:00.000Z`,
+                  request_id: "remote-yesterday-2",
                   developer_id: "dev-b",
                   repo: "other-repo",
                   model: "gpt-4o",
@@ -92,11 +113,11 @@ describe("usePolling", () => {
 
     await waitFor(() => {
       expect(useStore.getState().todayLogs).toHaveLength(1);
-      expect(useStore.getState().weekLogs).toHaveLength(1);
+      expect(useStore.getState().weekLogs).toHaveLength(2);
     });
 
     expect(useStore.getState().metrics?.developer_id).toBe("dev-a");
-    expect(useStore.getState().weekLogs[0]?.developer_id).toBe("dev-a");
+    expect(useStore.getState().weekLogs.every((log) => log.developer_id === "dev-a")).toBe(true);
     expect(useStore.getState().proxyStatus).toEqual({
       running: true,
       enabled: true,
@@ -129,5 +150,138 @@ describe("usePolling", () => {
 
     unmount();
     vi.useRealTimers();
+  });
+
+  it("merges local today logs into week activity when API data is empty", async () => {
+    const today = isoDate(0);
+    const yesterday = isoDate(-1);
+
+    apiMocks.readLocalLogs.mockImplementation(async (date: string) => {
+      if (date === today) {
+        return [
+          {
+            ts: `${today}T10:00:00.000Z`,
+            request_id: "local-1",
+            developer_id: "dev-a",
+            repo: "tailor-bar",
+            model: "claude-sonnet-4",
+            input_tokens: 1000,
+            output_tokens: 500,
+          },
+        ];
+      }
+
+      if (date === yesterday) {
+        return [
+          {
+            ts: `${yesterday}T09:00:00.000Z`,
+            request_id: "local-yesterday-1",
+            developer_id: "dev-a",
+            repo: "tailor-bar",
+            model: "claude-sonnet-4",
+            input_tokens: 700,
+            output_tokens: 300,
+          },
+        ];
+      }
+
+      return [];
+    });
+    apiMocks.fetchMetrics.mockResolvedValue({
+      metrics: [
+        {
+          developer_id: "dev-a",
+          total_tokens_1h: 1500,
+          opus_tokens_1h: 0,
+          opus_streak: 0,
+          last_updated: `${today}T10:00:00.000Z`,
+          warning_flag: false,
+        },
+      ],
+    });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+    apiMocks.getProxySettings.mockResolvedValue({ share_diagnostics: false });
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().weekLogs).toHaveLength(2);
+    });
+
+    expect(useStore.getState().weekLogs.map((log) => log.request_id)).toEqual([
+      "local-yesterday-1",
+      "local-1",
+    ]);
+  });
+
+  it("prefers a known developer id over unknown local entries", async () => {
+    const today = isoDate(0);
+    const yesterday = isoDate(-1);
+
+    apiMocks.readLocalLogs.mockImplementation(async (date: string) => {
+      if (date === today) {
+        return [
+          {
+            ts: `${today}T08:00:00.000Z`,
+            request_id: "unknown-local-1",
+            developer_id: "unknown",
+            repo: "unknown",
+            model: "claude-sonnet-4",
+            input_tokens: 10,
+            output_tokens: 5,
+          },
+          {
+            ts: `${today}T09:00:00.000Z`,
+            request_id: "known-local-1",
+            developer_id: "dev-a",
+            repo: "tailor-bar",
+            model: "claude-sonnet-4",
+            input_tokens: 10,
+            output_tokens: 5,
+          },
+        ];
+      }
+
+      if (date === yesterday) {
+        return [
+          {
+            ts: `${yesterday}T09:00:00.000Z`,
+            request_id: "known-local-2",
+            developer_id: "dev-a",
+            repo: "tailor-bar",
+            model: "claude-sonnet-4",
+            input_tokens: 10,
+            output_tokens: 5,
+          },
+        ];
+      }
+
+      return [];
+    });
+    apiMocks.fetchMetrics.mockResolvedValue({
+      metrics: [
+        {
+          developer_id: "dev-a",
+          total_tokens_1h: 15,
+          opus_tokens_1h: 0,
+          opus_streak: 0,
+          last_updated: `${today}T10:00:00.000Z`,
+          warning_flag: false,
+        },
+      ],
+    });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+    apiMocks.getProxySettings.mockResolvedValue({ share_diagnostics: false });
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().weekLogs).toHaveLength(2);
+    });
+
+    expect(useStore.getState().weekLogs.every((log) => log.developer_id === "dev-a")).toBe(true);
+    expect(useStore.getState().weekLogs.every((log) => log.repo === "tailor-bar")).toBe(true);
   });
 });

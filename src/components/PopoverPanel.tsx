@@ -1,15 +1,17 @@
 import { useStore } from "../store";
 import { usePolling } from "../hooks/usePolling";
 import { UsageLimitsBar } from "./UsageLimitsBar";
-import { ProxyToggle } from "./sections/ProxyToggle";
+import { ProxySwitch, ProxyToggle, useProxyToggleControl } from "./sections/ProxyToggle";
 import { RealtimeSection } from "./sections/RealtimeSection";
 import { TodaySection } from "./sections/TodaySection";
 import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
+import tailorLogo from "../../src-tauri/icons/new-icon.png";
 
 export function PopoverPanel() {
   const { refresh } = usePolling();
-  const { loading, error } = useStore();
+  const { loading, error, proxyStatus } = useStore();
+  const { loading: proxyLoading, error: proxyError, handleProxyToggle } = useProxyToggleControl();
 
   return (
     <div className="h-full p-2 flex flex-col">
@@ -32,6 +34,25 @@ export function PopoverPanel() {
           </div>
         )}
 
+        <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
+          <img src={tailorLogo} alt="Tailor" className="h-7 w-7 rounded-md object-contain" />
+          <div className="flex items-center gap-2">
+            <div
+              className={`h-2 w-2 rounded-full ${
+                proxyStatus.enabled ? "bg-green-400" : "bg-red-400"
+              }`}
+            />
+            <span className="text-sm text-gray-600">
+              {proxyStatus.enabled ? "Proxy Active" : "Proxy inactive"}
+            </span>
+            <ProxySwitch
+              enabled={proxyStatus.enabled}
+              loading={proxyLoading}
+              onToggle={handleProxyToggle}
+            />
+          </div>
+        </div>
+
         <div className="flex-1 overflow-y-auto">
           <UsageLimitsBar />
           <RealtimeSection />
@@ -40,7 +61,7 @@ export function PopoverPanel() {
           <Divider />
           <WeekSection />
           <Divider />
-          <ProxyToggle />
+          <ProxyToggle error={proxyError} />
         </div>
 
         <div className="border-t border-gray-100">

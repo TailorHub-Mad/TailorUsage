@@ -263,7 +263,7 @@ fn get_preferences(app: AppHandle) -> serde_json::Value {
         .and_then(|d| serde_json::from_str(&d).ok())
         .unwrap_or(serde_json::json!({
             "poll_interval": 60000,
-            "tray_display": "cost"
+            "tray_display": "tokens"
         }))
 }
 
@@ -426,7 +426,7 @@ pub fn run() {
                 WebviewUrl::default(),
             )
             .title("TailorUsage")
-            .inner_size(380.0, 520.0)
+            .inner_size(440.0, 620.0)
             .decorations(false)
             .transparent(true)
             .shadow(true)

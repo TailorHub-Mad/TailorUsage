@@ -14,6 +14,36 @@ import { formatCost, formatTokens } from "../lib/format";
 import { normalizeLogRecords } from "../lib/logs";
 import type { LogRecord, DeveloperMetrics } from "../lib/types";
 
+function mergeLogs(primary: LogRecord[], secondary: LogRecord[]): LogRecord[] {
+  const merged = new Map<string, LogRecord>();
+
+  for (const log of [...primary, ...secondary]) {
+    merged.set(log.request_id, log);
+  }
+
+  return [...merged.values()].sort((a, b) => {
+    const aTime = typeof a.ts === "number" ? a.ts : new Date(String(a.ts)).getTime();
+    const bTime = typeof b.ts === "number" ? b.ts : new Date(String(b.ts)).getTime();
+    return aTime - bTime;
+  });
+}
+
+function formatDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isKnownDeveloperId(value: string | null | undefined): value is string {
+  return Boolean(value && value.trim() && value !== "unknown");
+}
+
+function preferredDeveloperId(logs: LogRecord[]): string | null {
+  const known = logs.find((log) => isKnownDeveloperId(log.developer_id));
+  return known?.developer_id ?? logs[0]?.developer_id ?? null;
+}
+
 function isUnauthorizedError(error: unknown): boolean {
   return error instanceof Error
     ? error.message === "unauthorized"
@@ -34,13 +64,34 @@ async function fetchMetricsWithRetry(cookie: string) {
 }
 
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  return formatDate(new Date());
 }
 
-function weekAgoStr(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 7);
-  return d.toISOString().slice(0, 10);
+function currentWeekStart(): Date {
+  const date = new Date();
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function weekStartStr(): string {
+  const d = currentWeekStart();
+  return formatDate(d);
+}
+
+function currentWeekDateStrings(): string[] {
+  const start = currentWeekStart();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Math.floor((today.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return formatDate(date);
+  });
 }
 
 export function usePolling() {
@@ -74,8 +125,9 @@ export function usePolling() {
         setTodayLogs(todayLogs);
 
         // Derive current user's developer_id from local logs
-        if (todayLogs.length > 0) {
-          myIdRef.current = todayLogs[0].developer_id;
+        const localDeveloperId = preferredDeveloperId(todayLogs);
+        if (isKnownDeveloperId(localDeveloperId) || !myIdRef.current) {
+          myIdRef.current = localDeveloperId;
         }
 
         // Keep tray title in sync
@@ -94,22 +146,30 @@ export function usePolling() {
       }
     };
 
-    // Slow poll: fetch week history + proxy status from the API
+    // Slow poll: fetch week history + local week logs + proxy status from the API
     const pollApi = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const [metricsRes, weekRes, proxyEnabled, proxySettings] =
+        const [metricsRes, weekRes, localWeekRaw, proxyEnabled, proxySettings] =
           await Promise.all([
             fetchMetricsWithRetry(cookie).catch((e: unknown) => {
               if (isUnauthorizedError(e)) throw e;
               return null;
             }),
-            fetchUsage(cookie, weekAgoStr(), todayStr()).catch(() => null),
+            fetchUsage(cookie, weekStartStr(), todayStr()).catch(() => null),
+            Promise.all(currentWeekDateStrings().map((date) => readLocalLogs(date).catch(() => []))),
             getProxyEnabled().catch(() => null),
             getProxySettings().catch(() => ({ share_diagnostics: false })),
           ]);
+
+        const normalizedLocalWeekLogs = normalizeLogRecords(localWeekRaw.flat());
+
+        const localWeekDeveloperId = preferredDeveloperId(normalizedLocalWeekLogs);
+        if (isKnownDeveloperId(localWeekDeveloperId) || !myIdRef.current) {
+          myIdRef.current = localWeekDeveloperId;
+        }
 
         if (metricsRes) {
           const metricsArr = (metricsRes as { metrics?: DeveloperMetrics[] })
@@ -117,7 +177,7 @@ export function usePolling() {
           if (metricsArr && metricsArr.length > 0) {
             setMetrics(metricsArr[0]);
             // Fall back to metrics for developer_id if local logs are empty
-            if (!myIdRef.current) {
+            if (!isKnownDeveloperId(myIdRef.current)) {
               myIdRef.current = metricsArr[0].developer_id;
             }
           }
@@ -128,10 +188,13 @@ export function usePolling() {
         const normalizedWeekLogs = normalizeLogRecords(allWeekLogs as unknown[]);
 
         // Filter to current user's logs only
-        const weekLogs = myIdRef.current
+        const remoteWeekLogs = myIdRef.current
           ? normalizedWeekLogs.filter((l) => l.developer_id === myIdRef.current)
           : normalizedWeekLogs;
-        setWeekLogs(weekLogs);
+        const localWeekLogs = myIdRef.current
+          ? normalizedLocalWeekLogs.filter((l) => l.developer_id === myIdRef.current)
+          : normalizedLocalWeekLogs;
+        setWeekLogs(mergeLogs(remoteWeekLogs, localWeekLogs));
 
         // Only update proxy status if the IPC call succeeded (null = failed, preserve existing state)
         if (proxyEnabled !== null) {

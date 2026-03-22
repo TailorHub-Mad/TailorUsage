@@ -234,7 +234,10 @@ pub async fn forward(
                 Provider::Anthropic => {
                     acc.model = v.get("model").and_then(|m| m.as_str()).map(|s| s.to_string());
                     if let Some(usage) = v.get("usage") {
-                        acc.input_tokens = usage.get("input_tokens").and_then(|t| t.as_u64());
+                        let input = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                        let cache_creation = usage.get("cache_creation_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                        let cache_read = usage.get("cache_read_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                        acc.input_tokens = Some(input + cache_creation + cache_read);
                         acc.output_tokens = usage.get("output_tokens").and_then(|t| t.as_u64());
                     }
                     acc.stop_reason = v.get("stop_reason").and_then(|s| s.as_str()).map(|s| s.to_string());

@@ -30,7 +30,7 @@ export const useStore = create<AppStore>((set) => ({
   todayLogs: [],
   weekLogs: [],
   proxyStatus: { running: false, enabled: false, shareDiagnostics: false },
-  preferences: { poll_interval: 60000, tray_display: "cost" },
+  preferences: { poll_interval: 60000, tray_display: "tokens" },
   loading: false,
   error: null,
 

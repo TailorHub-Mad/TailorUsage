@@ -17,9 +17,10 @@ pub fn parse_anthropic_event(event_type: &str, data: &str, acc: &mut StreamAccum
                     acc.model = Some(model.to_string());
                 }
                 if let Some(usage) = msg.get("usage") {
-                    if let Some(input) = usage.get("input_tokens").and_then(|t| t.as_u64()) {
-                        acc.input_tokens = Some(input);
-                    }
+                    let input = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                    let cache_creation = usage.get("cache_creation_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                    let cache_read = usage.get("cache_read_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                    acc.input_tokens = Some(input + cache_creation + cache_read);
                 }
             }
         }

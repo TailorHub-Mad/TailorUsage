@@ -46,18 +46,6 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
             {opt.label}
           </button>
         ))}
-        <span className="text-gray-200 text-xs">|</span>
-        <button
-          onClick={() =>
-            updatePrefs({
-              tray_display: preferences.tray_display === "cost" ? "tokens" : "cost",
-            })
-          }
-          className="px-2 py-1 text-xs rounded-md text-gray-400 hover:text-gray-600 transition-colors"
-          title="Toggle tray display: cost or tokens"
-        >
-          {preferences.tray_display === "cost" ? "$ tray" : "T tray"}
-        </button>
       </div>
 
       <div className="flex items-center gap-2">

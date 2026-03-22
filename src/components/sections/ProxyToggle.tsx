@@ -3,6 +3,12 @@ import { useStore } from "../../store";
 import { startProxy, stopProxy, setProxySettings } from "../../lib/api";
 import { latestLogForProvider } from "../../lib/logs";
 
+type ProxySwitchProps = {
+  enabled: boolean;
+  loading?: boolean;
+  onToggle: () => void;
+};
+
 function formatLastSeen(ts: string | number | null) {
   if (!ts) return "No local traffic yet";
   const numericTs = typeof ts === "number" ? ts : Number(ts);
@@ -17,17 +23,33 @@ function formatLastSeen(ts: string | number | null) {
   });
 }
 
-export function ProxyToggle() {
-  const { proxyStatus, todayLogs, setProxyStatus } = useStore();
+export function ProxySwitch({ enabled, loading = false, onToggle }: ProxySwitchProps) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={loading}
+      aria-label={enabled ? "Disable proxy" : "Enable proxy"}
+      className={`relative h-5 w-9 rounded-full transition-colors ${
+        enabled ? "bg-green-400" : "bg-red-300"
+      } ${loading ? "opacity-50" : ""}`}
+    >
+      <div
+        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+          enabled ? "translate-x-4" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
+type ProxyToggleProps = {
+  error?: string | null;
+};
+
+export function useProxyToggleControl() {
+  const { proxyStatus, setProxyStatus } = useStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const anthropicLogs = todayLogs.filter((log) => !log.provider || log.provider === "anthropic");
-  const openaiLogs = todayLogs.filter((log) => log.provider === "openai");
-  const latestOpenaiLog = latestLogForProvider(todayLogs, "openai");
-  const latestAnyLog = latestLogForProvider(todayLogs);
-  const latestOpenaiFailure = [...openaiLogs].reverse().find((log) => log.status >= 400) ?? null;
-  const showDiagnostics = proxyStatus.enabled || todayLogs.length > 0;
 
   const handleProxyToggle = async () => {
     setLoading(true);
@@ -42,7 +64,6 @@ export function ProxyToggle() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // "already running" means Rust state is ahead of UI — sync instead of error
       if (msg.toLowerCase().includes("already running")) {
         setProxyStatus({ ...proxyStatus, enabled: true, running: true });
       } else {
@@ -52,6 +73,19 @@ export function ProxyToggle() {
       setLoading(false);
     }
   };
+
+  return { loading, error, handleProxyToggle };
+}
+
+export function ProxyToggle({ error = null }: ProxyToggleProps) {
+  const { proxyStatus, todayLogs, setProxyStatus } = useStore();
+
+  const anthropicLogs = todayLogs.filter((log) => !log.provider || log.provider === "anthropic");
+  const openaiLogs = todayLogs.filter((log) => log.provider === "openai");
+  const latestOpenaiLog = latestLogForProvider(todayLogs, "openai");
+  const latestAnyLog = latestLogForProvider(todayLogs);
+  const latestOpenaiFailure = [...openaiLogs].reverse().find((log) => log.status >= 400) ?? null;
+  const showDiagnostics = proxyStatus.enabled || todayLogs.length > 0;
 
   const handleDiagnosticsToggle = async () => {
     if (!proxyStatus.enabled) return;
@@ -66,33 +100,6 @@ export function ProxyToggle() {
 
   return (
     <div className="px-4 py-3 space-y-2">
-      {/* Main proxy toggle */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div
-            className={`w-2 h-2 rounded-full ${
-              proxyStatus.enabled ? "bg-green-400" : "bg-gray-300"
-            }`}
-          />
-          <span className="text-sm text-gray-600">
-            {loading ? "Starting..." : proxyStatus.enabled ? "Proxy Active" : "Proxy Off"}
-          </span>
-        </div>
-        <button
-          onClick={handleProxyToggle}
-          disabled={loading}
-          className={`relative w-9 h-5 rounded-full transition-colors ${
-            proxyStatus.enabled ? "bg-green-400" : "bg-gray-200"
-          } ${loading ? "opacity-50" : ""}`}
-        >
-          <div
-            className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-              proxyStatus.enabled ? "translate-x-4" : "translate-x-0.5"
-            }`}
-          />
-        </button>
-      </div>
-
       {/* Port status indicators */}
       {proxyStatus.enabled && (
         <div className="flex gap-3 text-xs text-gray-400">
