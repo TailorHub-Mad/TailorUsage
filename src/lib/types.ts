@@ -13,7 +13,6 @@ export interface LogRecord {
   output_tokens: number;
   stop_reason: string;
   error_message?: string;
-  share_diagnostics?: boolean;
 }
 
 export interface DeveloperMetrics {
@@ -25,13 +24,63 @@ export interface DeveloperMetrics {
   warning_flag: boolean;
 }
 
+export interface ClaudeUsageWindow {
+  utilization: number;
+  resets_at: string;
+}
+
+export interface ClaudeExtraUsage {
+  is_enabled: boolean;
+  used_credits: number;
+  monthly_limit: number;
+  currency: string;
+}
+
+export interface ClaudeUsage {
+  five_hour?: ClaudeUsageWindow | null;
+  seven_day?: ClaudeUsageWindow | null;
+  seven_day_opus?: ClaudeUsageWindow | null;
+  extra_usage?: ClaudeExtraUsage | null;
+}
+
+export interface CodexUsageWindow {
+  used_percent: number;
+  reset_at: number;
+  limit_window_seconds: number;
+}
+
+export interface CodexRateLimit {
+  primary_window?: CodexUsageWindow | null;
+  secondary_window?: CodexUsageWindow | null;
+}
+
+export interface CodexCredits {
+  has_credits: boolean;
+  unlimited: boolean;
+  balance: number;
+}
+
+export interface CodexUsage {
+  plan_type?: string;
+  rate_limit?: CodexRateLimit | null;
+  code_review_rate_limit?: {
+    primary_window?: CodexUsageWindow | null;
+  } | null;
+  credits?: CodexCredits | null;
+}
+
 export interface ProxyStatus {
   running: boolean;
   enabled: boolean;
-  shareDiagnostics: boolean;
 }
 
 export interface Preferences {
   poll_interval: number;
   tray_display: "cost" | "tokens";
+}
+
+export interface UpdateInfo {
+  available: boolean;
+  latest_version: string;
+  download_url: string;
 }

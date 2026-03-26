@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Preferences } from "./types";
+import type { ClaudeUsage, CodexUsage, Preferences } from "./types";
 
 export async function getAuthCookie(): Promise<string | null> {
   return invoke<string | null>("get_auth_cookie");
@@ -35,6 +35,14 @@ export async function fetchUsage(
   });
 }
 
+export async function fetchClaudeUsage(): Promise<ClaudeUsage> {
+  return invoke("fetch_claude_usage");
+}
+
+export async function fetchCodexUsage(): Promise<CodexUsage> {
+  return invoke("fetch_codex_usage");
+}
+
 export async function readLocalLogs(date: string): Promise<Record<string, unknown>[]> {
   return invoke("read_local_logs", { date });
 }
@@ -45,16 +53,6 @@ export async function setTrayTitle(title: string): Promise<void> {
 
 export async function checkProxyRunning(): Promise<boolean> {
   return invoke("check_proxy_running");
-}
-
-export async function getProxySettings(): Promise<Record<string, unknown>> {
-  return invoke("get_proxy_settings");
-}
-
-export async function setProxySettings(
-  shareDiagnostics: boolean,
-): Promise<void> {
-  return invoke("set_proxy_settings", { shareDiagnostics });
 }
 
 export async function getPreferences(): Promise<Preferences> {
@@ -75,4 +73,24 @@ export async function stopProxy(): Promise<void> {
 
 export async function getProxyEnabled(): Promise<boolean> {
   return invoke("get_proxy_enabled");
+}
+
+export async function getAppVersion(): Promise<string> {
+  return invoke("get_app_version");
+}
+
+export async function checkForUpdate(): Promise<import("./types").UpdateInfo> {
+  return invoke("check_for_update");
+}
+
+export async function openUrl(url: string): Promise<void> {
+  return invoke("open_url", { url });
+}
+
+export async function keepWindowVisible(): Promise<void> {
+  return invoke("keep_window_visible");
+}
+
+export async function forwardLogsToDashboard(): Promise<number> {
+  return invoke("forward_logs_to_dashboard");
 }

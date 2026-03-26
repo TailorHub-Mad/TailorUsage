@@ -2,10 +2,9 @@ import { useStore } from "../store";
 import { usePolling } from "../hooks/usePolling";
 import { UsageLimitsBar } from "./UsageLimitsBar";
 import { ProxySwitch, ProxyToggle, useProxyToggleControl } from "./sections/ProxyToggle";
-import { RealtimeSection } from "./sections/RealtimeSection";
-import { TodaySection } from "./sections/TodaySection";
 import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
+import { keepWindowVisible } from "../lib/api";
 import tailorLogo from "../../src-tauri/icons/new-icon.png";
 
 export function PopoverPanel() {
@@ -34,7 +33,7 @@ export function PopoverPanel() {
           </div>
         )}
 
-        <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
+        <div data-tauri-drag-region onMouseDown={() => keepWindowVisible()} className="px-4 pt-3 pb-2 flex items-center justify-between gap-3 cursor-move">
           <img src={tailorLogo} alt="Tailor" className="h-7 w-7 rounded-md object-contain" />
           <div className="flex items-center gap-2">
             <div
@@ -43,7 +42,7 @@ export function PopoverPanel() {
               }`}
             />
             <span className="text-sm text-gray-600">
-              {proxyStatus.enabled ? "Proxy Active" : "Proxy inactive"}
+              {proxyStatus.enabled ? "Proxy active" : "Proxy inactive"}
             </span>
             <ProxySwitch
               enabled={proxyStatus.enabled}
@@ -55,9 +54,6 @@ export function PopoverPanel() {
 
         <div className="flex-1 overflow-y-auto">
           <UsageLimitsBar />
-          <RealtimeSection />
-          <Divider />
-          <TodaySection />
           <Divider />
           <WeekSection />
           <Divider />

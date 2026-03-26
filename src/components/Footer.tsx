@@ -1,16 +1,17 @@
 import { useState } from "react";
 import { useStore } from "../store";
-import { clearAuthCookie, setPreferences as savePreferences } from "../lib/api";
+import { clearAuthCookie, setPreferences as savePreferences, openUrl } from "../lib/api";
 import type { Preferences } from "../lib/types";
 
 const POLL_OPTIONS = [
-  { label: "30s", value: 30000 },
-  { label: "1m", value: 60000 },
   { label: "5m", value: 300000 },
+  { label: "15m", value: 900000 },
+  { label: "30m", value: 1800000 },
+  { label: "1h", value: 3600000 },
 ];
 
 export function Footer({ onRefresh }: { onRefresh?: () => void }) {
-  const { preferences, setPreferences, signOut } = useStore();
+  const { preferences, setPreferences, signOut, updateInfo, appVersion } = useStore();
   const [spinning, setSpinning] = useState(false);
 
   const updatePrefs = async (update: Partial<Preferences>) => {
@@ -28,6 +29,12 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
     setSpinning(true);
     await onRefresh?.();
     setTimeout(() => setSpinning(false), 600);
+  };
+
+  const handleUpdate = () => {
+    if (updateInfo?.download_url) {
+      openUrl(updateInfo.download_url).catch(() => {});
+    }
   };
 
   return (
@@ -49,6 +56,20 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
       </div>
 
       <div className="flex items-center gap-2">
+        {appVersion && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-400">v{appVersion}</span>
+            {updateInfo?.available && (
+              <button
+                onClick={handleUpdate}
+                title={`Update to v${updateInfo.latest_version}`}
+                className="text-xs font-medium text-amber-600 hover:text-amber-700 transition-colors"
+              >
+                ↑ v{updateInfo.latest_version}
+              </button>
+            )}
+          </div>
+        )}
         <button
           onClick={handleRefresh}
           title="Refresh now"

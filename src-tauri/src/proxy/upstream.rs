@@ -1,12 +1,49 @@
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response};
-use reqwest::header::{AUTHORIZATION, HeaderValue};
+use reqwest::header::{HeaderValue, AUTHORIZATION};
 use std::time::Instant;
 
 use crate::proxy::logger;
 use crate::proxy::sse_parser;
 use crate::proxy::types::{LogEntry, Provider, StreamAccumulator};
+
+fn meaningful_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && !value.eq_ignore_ascii_case("unknown")
+                && !value.eq_ignore_ascii_case("null")
+                && !value.eq_ignore_ascii_case("undefined")
+        })
+        .map(str::to_string)
+}
+
+fn string_at_path(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+
+    for key in path {
+        current = current.get(*key)?;
+    }
+
+    meaningful_string(current.as_str())
+}
+
+fn extract_openai_model(value: &serde_json::Value) -> Option<String> {
+    [
+        &["model"][..],
+        &["response", "model"],
+        &["response", "response", "model"],
+        &["response", "body", "model"],
+        &["data", "model"],
+        &["data", "response", "model"],
+        &["request", "model"],
+        &["request", "body", "model"],
+    ]
+    .iter()
+    .find_map(|path| string_at_path(value, path))
+}
 
 fn normalize_upstream_path(provider: Provider, uri: &hyper::Uri) -> String {
     let path_and_query = uri
@@ -29,16 +66,7 @@ fn normalize_upstream_path(provider: Provider, uri: &hyper::Uri) -> String {
 }
 
 fn extract_openai_response_fields(v: &serde_json::Value, acc: &mut StreamAccumulator) {
-    acc.model = v
-        .get("model")
-        .and_then(|m| m.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            v.get("response")
-                .and_then(|r| r.get("model"))
-                .and_then(|m| m.as_str())
-                .map(|s| s.to_string())
-        });
+    acc.model = extract_openai_model(v);
 
     if let Some(usage) = v.get("usage") {
         acc.input_tokens = usage
@@ -150,7 +178,10 @@ pub async fn forward(
     let body_bytes = match http_body_util::BodyExt::collect(req.into_body()).await {
         Ok(collected) => collected.to_bytes(),
         Err(e) => {
-            return Ok(error_response(502, &format!("Failed to read request body: {}", e)));
+            return Ok(error_response(
+                502,
+                &format!("Failed to read request body: {}", e),
+            ));
         }
     };
 
@@ -163,10 +194,8 @@ pub async fn forward(
         .unwrap_or(false);
     let req_model = body_json
         .as_ref()
-        .and_then(|j| j.get("model"))
-        .and_then(|m| m.as_str())
-        .unwrap_or("")
-        .to_string();
+        .and_then(extract_openai_model)
+        .unwrap_or_default();
 
     // For OpenAI streaming requests, inject stream_options to get usage in final chunk
     let send_body = if provider == Provider::Openai && is_stream {
@@ -210,7 +239,10 @@ pub async fn forward(
     let resp_bytes = match upstream_resp.bytes().await {
         Ok(b) => b,
         Err(e) => {
-            return Ok(error_response(502, &format!("Failed to read upstream response: {}", e)));
+            return Ok(error_response(
+                502,
+                &format!("Failed to read upstream response: {}", e),
+            ));
         }
     };
 
@@ -232,15 +264,30 @@ pub async fn forward(
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&resp_bytes) {
             match provider {
                 Provider::Anthropic => {
-                    acc.model = v.get("model").and_then(|m| m.as_str()).map(|s| s.to_string());
+                    acc.model = v
+                        .get("model")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
                     if let Some(usage) = v.get("usage") {
-                        let input = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                        let cache_creation = usage.get("cache_creation_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                        let cache_read = usage.get("cache_read_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                        let input = usage
+                            .get("input_tokens")
+                            .and_then(|t| t.as_u64())
+                            .unwrap_or(0);
+                        let cache_creation = usage
+                            .get("cache_creation_input_tokens")
+                            .and_then(|t| t.as_u64())
+                            .unwrap_or(0);
+                        let cache_read = usage
+                            .get("cache_read_input_tokens")
+                            .and_then(|t| t.as_u64())
+                            .unwrap_or(0);
                         acc.input_tokens = Some(input + cache_creation + cache_read);
                         acc.output_tokens = usage.get("output_tokens").and_then(|t| t.as_u64());
                     }
-                    acc.stop_reason = v.get("stop_reason").and_then(|s| s.as_str()).map(|s| s.to_string());
+                    acc.stop_reason = v
+                        .get("stop_reason")
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.to_string());
                 }
                 Provider::Openai => {
                     extract_openai_response_fields(&v, &mut acc);
@@ -250,7 +297,7 @@ pub async fn forward(
     }
 
     // Log the request
-    let model = acc.model.unwrap_or(req_model);
+    let model = acc.model.filter(|value| !value.is_empty()).unwrap_or(req_model);
     let entry = LogEntry {
         ts: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -269,7 +316,6 @@ pub async fn forward(
         output_tokens: acc.output_tokens.unwrap_or(0),
         stop_reason: acc.stop_reason.unwrap_or_default(),
         error_message,
-        share_diagnostics: logger::read_share_diagnostics(),
     };
 
     logger::append_log(&entry);
@@ -295,6 +341,31 @@ pub async fn forward(
     Ok(builder
         .body(Full::new(resp_bytes))
         .unwrap_or_else(|_| error_response(500, "Failed to build response")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_openai_model, meaningful_string};
+
+    #[test]
+    fn ignores_placeholder_model_values() {
+        assert_eq!(meaningful_string(Some("unknown")), None);
+        assert_eq!(meaningful_string(Some(" gpt-5.4 ")), Some("gpt-5.4".to_string()));
+    }
+
+    #[test]
+    fn extracts_nested_openai_models() {
+        let payload = serde_json::json!({
+            "model": "unknown",
+            "response": {
+                "body": {
+                    "model": "gpt-5.4"
+                }
+            }
+        });
+
+        assert_eq!(extract_openai_model(&payload), Some("gpt-5.4".to_string()));
+    }
 }
 
 fn error_response(status: u16, msg: &str) -> Response<Full<Bytes>> {

@@ -1,18 +1,88 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store";
 import {
+  fetchClaudeUsage,
+  fetchCodexUsage,
   fetchMetrics,
-  fetchUsage,
-  readLocalLogs,
-  getProxyEnabled,
-  getProxySettings,
-  setTrayTitle,
-  clearAuthCookie,
-} from "../lib/api";
+    fetchUsage,
+    readLocalLogs,
+    getProxyEnabled,
+    setTrayTitle,
+    clearAuthCookie,
+    forwardLogsToDashboard,
+  } from "../lib/api";
 import { calculateCost } from "../lib/cost";
-import { formatCost, formatTokens } from "../lib/format";
+import { formatCost } from "../lib/format";
+import { DAILY_LIMIT, formatResetTime, formatUsagePercent, totalTokens } from "../lib/usage";
 import { normalizeLogRecords } from "../lib/logs";
-import type { LogRecord, DeveloperMetrics } from "../lib/types";
+import type { LogRecord, DeveloperMetrics, ClaudeUsage, CodexUsage } from "../lib/types";
+
+function parseStatusCode(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = message.match(/\b(\d{3})\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseRetryAfterTimestamp(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : String(error);
+  // Format: claude_usage_failed:<status>:<unix_seconds>
+  const match = message.match(/claude_usage_failed:[^:]+:(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function formatProviderUsageError(error: unknown): string {
+  const statusCode = parseStatusCode(error);
+  if (statusCode) {
+    const retryAt = parseRetryAfterTimestamp(error);
+    const resetSuffix = retryAt ? ` ${formatResetTime(retryAt)}` : " Try again later.";
+    return `Usage request failed (HTTP ${statusCode}).${resetSuffix}`;
+  }
+
+  return "Usage request failed. Try again later.";
+}
+
+function latestProvider(logs: LogRecord[]): "anthropic" | "openai" | null {
+  const latestLog = [...logs].sort((a, b) => {
+    const aTime = typeof a.ts === "number" ? a.ts : new Date(String(a.ts)).getTime();
+    const bTime = typeof b.ts === "number" ? b.ts : new Date(String(b.ts)).getTime();
+    return bTime - aTime;
+  })[0];
+
+  if (!latestLog) return null;
+  return latestLog.provider === "openai" ? "openai" : "anthropic";
+}
+
+function formatTrayTitle(
+  cost: number,
+  logs: LogRecord[],
+  trayDisplay: "cost" | "tokens",
+  claudeUsage: ClaudeUsage | null,
+  codexUsage: CodexUsage | null,
+): string {
+  if (trayDisplay === "cost") {
+    return formatCost(cost);
+  }
+
+  const activeProvider = latestProvider(logs);
+  if (activeProvider === "openai") {
+    const codexUtilization = codexUsage?.rate_limit?.primary_window?.used_percent;
+    if (typeof codexUtilization === "number") {
+      return `${Math.round(codexUtilization)}%`;
+    }
+  }
+
+  const claudeUtilization = claudeUsage?.five_hour?.utilization;
+  if (typeof claudeUtilization === "number") {
+    return `${Math.round(claudeUtilization)}%`;
+  }
+
+  const codexUtilization = codexUsage?.rate_limit?.primary_window?.used_percent;
+  if (typeof codexUtilization === "number") {
+    return `${Math.round(codexUtilization)}%`;
+  }
+
+  return formatUsagePercent(totalTokens(logs), DAILY_LIMIT);
+}
 
 function mergeLogs(primary: LogRecord[], secondary: LogRecord[]): LogRecord[] {
   const merged = new Map<string, LogRecord>();
@@ -100,6 +170,10 @@ export function usePolling() {
     cookie,
     preferences,
     setMetrics,
+    setClaudeUsage,
+    setClaudeUsageError,
+    setCodexUsage,
+    setCodexUsageError,
     setTodayLogs,
     setWeekLogs,
     setProxyStatus,
@@ -132,14 +206,13 @@ export function usePolling() {
 
         // Keep tray title in sync
         const cost = calculateCost(todayLogs);
-        const totalTokens = todayLogs.reduce(
-          (sum, l) => sum + l.input_tokens + l.output_tokens,
-          0,
+        const title = formatTrayTitle(
+          cost,
+          todayLogs,
+          preferences.tray_display,
+          useStore.getState().claudeUsage,
+          useStore.getState().codexUsage,
         );
-        const title =
-          preferences.tray_display === "cost"
-            ? formatCost(cost)
-            : formatTokens(totalTokens);
         setTrayTitle(title);
       } catch {
         // local log read failure is non-fatal — fall back to API data
@@ -152,17 +225,31 @@ export function usePolling() {
         setLoading(true);
         setError(null);
 
-        const [metricsRes, weekRes, localWeekRaw, proxyEnabled, proxySettings] =
+        const [metricsRes, weekRes, claudeUsageResult, codexUsageResult, localWeekRaw, proxyEnabled] =
           await Promise.all([
             fetchMetricsWithRetry(cookie).catch((e: unknown) => {
               if (isUnauthorizedError(e)) throw e;
               return null;
             }),
             fetchUsage(cookie, weekStartStr(), todayStr()).catch(() => null),
+            fetchClaudeUsage()
+              .then((data) => ({ data, error: null }))
+              .catch((error: unknown) => ({ data: null, error })),
+            fetchCodexUsage()
+              .then((data) => ({ data, error: null }))
+              .catch((error: unknown) => ({ data: null, error })),
             Promise.all(currentWeekDateStrings().map((date) => readLocalLogs(date).catch(() => []))),
             getProxyEnabled().catch(() => null),
-            getProxySettings().catch(() => ({ share_diagnostics: false })),
           ]);
+
+        setClaudeUsage((claudeUsageResult.data as ClaudeUsage | null) ?? null);
+        setClaudeUsageError(
+          claudeUsageResult.error ? formatProviderUsageError(claudeUsageResult.error) : null,
+        );
+        setCodexUsage((codexUsageResult.data as CodexUsage | null) ?? null);
+        setCodexUsageError(
+          codexUsageResult.error ? formatProviderUsageError(codexUsageResult.error) : null,
+        );
 
         const normalizedLocalWeekLogs = normalizeLogRecords(localWeekRaw.flat());
 
@@ -196,16 +283,27 @@ export function usePolling() {
           : normalizedLocalWeekLogs;
         setWeekLogs(mergeLogs(remoteWeekLogs, localWeekLogs));
 
+        const latestTodayLogs = useStore.getState().todayLogs;
+        setTrayTitle(
+          formatTrayTitle(
+            calculateCost(latestTodayLogs),
+            latestTodayLogs,
+            preferences.tray_display,
+            (claudeUsageResult.data as ClaudeUsage | null) ?? null,
+            (codexUsageResult.data as CodexUsage | null) ?? null,
+          ),
+        );
+
         // Only update proxy status if the IPC call succeeded (null = failed, preserve existing state)
         if (proxyEnabled !== null) {
           setProxyStatus({
             running: proxyEnabled as boolean,
             enabled: proxyEnabled as boolean,
-            shareDiagnostics:
-              (proxySettings as { share_diagnostics?: boolean })
-                .share_diagnostics ?? false,
           });
         }
+
+        // Forward any new proxy logs to the shared dashboard (fire-and-forget)
+        forwardLogsToDashboard().catch(() => {});
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (msg === "unauthorized") {
@@ -243,6 +341,10 @@ export function usePolling() {
     preferences.poll_interval,
     preferences.tray_display,
     setMetrics,
+    setClaudeUsage,
+    setClaudeUsageError,
+    setCodexUsage,
+    setCodexUsageError,
     setTodayLogs,
     setWeekLogs,
     setProxyStatus,

@@ -70,6 +70,35 @@ describe("normalizeLogRecord", () => {
     uuidSpy.mockRestore();
   });
 
+  it("prefers a meaningful nested OpenAI model over unknown placeholders", () => {
+    expect(
+      normalizeLogRecord({
+        endpoint: "/v1/responses",
+        model: "unknown",
+        request: {
+          model: "gpt-5.4",
+        },
+        response: {
+          body: {
+            model: "gpt-5.4",
+          },
+          usage: {
+            input_tokens: 220,
+            output_tokens: 40,
+          },
+        },
+        developer_id: "dev@example.com",
+        repo: "tailor-bar",
+      }),
+    ).toMatchObject({
+      provider: "openai",
+      endpoint: "/v1/responses",
+      model: "gpt-5.4",
+      input_tokens: 220,
+      output_tokens: 40,
+    });
+  });
+
   it("returns null for invalid values", () => {
     expect(normalizeLogRecord(null)).toBeNull();
     expect(normalizeLogRecord("not-an-object")).toBeNull();

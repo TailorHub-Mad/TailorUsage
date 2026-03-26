@@ -10,15 +10,6 @@ fn logs_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-fn settings_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".anthropic-proxy")
-            .join("settings.json"),
-    )
-}
-
 fn credentials_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(
@@ -31,18 +22,6 @@ fn credentials_path() -> Option<PathBuf> {
 fn read_json_file(path: PathBuf) -> Option<serde_json::Value> {
     let data = fs::read_to_string(path).ok()?;
     serde_json::from_str::<serde_json::Value>(&data).ok()
-}
-
-pub fn read_share_diagnostics() -> bool {
-    let Some(path) = settings_path() else {
-        return false;
-    };
-    let Some(v) = read_json_file(path) else {
-        return false;
-    };
-    v.get("share_diagnostics")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
 }
 
 pub fn read_openai_api_key() -> Option<String> {

@@ -1,17 +1,45 @@
 import { render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WeekSection } from "./WeekSection";
 import { useStore } from "../../store";
+
+let capturedLineChartProps: { margin?: { left?: number } } | undefined;
+let capturedXAxisProps:
+  | {
+      padding?: { left?: number; right?: number };
+    }
+  | undefined;
+
+vi.mock("recharts", () => ({
+  ResponsiveContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  LineChart: ({ children, ...props }: { children: ReactNode; margin?: { left?: number } }) => {
+    capturedLineChartProps = props;
+    return <div>{children}</div>;
+  },
+  CartesianGrid: () => null,
+  XAxis: (props: { padding?: { left?: number; right?: number } }) => {
+    capturedXAxisProps = props;
+    return null;
+  },
+  YAxis: () => null,
+  Tooltip: () => null,
+  Line: () => null,
+}));
 
 function resetStore() {
   useStore.setState({
     isAuthenticated: false,
     cookie: null,
     metrics: null,
+    claudeUsage: null,
+    claudeUsageError: null,
+    codexUsage: null,
+    codexUsageError: null,
     todayLogs: [],
     weekLogs: [],
-    proxyStatus: { running: false, enabled: false, shareDiagnostics: false },
-    preferences: { poll_interval: 60000, tray_display: "cost" },
+    proxyStatus: { running: false, enabled: false },
+    preferences: { poll_interval: 900000, tray_display: "cost" },
     loading: false,
     error: null,
   });
@@ -26,6 +54,8 @@ describe("WeekSection", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    capturedLineChartProps = undefined;
+    capturedXAxisProps = undefined;
   });
 
   it("renders a weekly activity chart when there are calls this week", () => {
@@ -100,6 +130,8 @@ describe("WeekSection", () => {
     expect(screen.getByText("42 calls", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("tailor-bar")).toBeInTheDocument();
     expect(screen.queryByText("No activity this week")).not.toBeInTheDocument();
+    expect(capturedLineChartProps?.margin?.left).toBe(0);
+    expect(capturedXAxisProps?.padding).toEqual({ left: 12, right: 12 });
   });
 
   it("prefers a known repo over unknown in the top repo summary", () => {

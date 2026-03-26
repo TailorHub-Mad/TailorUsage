@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{
@@ -54,6 +55,343 @@ fn clear_persisted_cookie(app: &AppHandle) {
     fs::remove_file(path).ok();
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeOauthCredentials {
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+    scopes: Vec<String>,
+    subscription_type: Option<String>,
+    rate_limit_tier: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClaudeCredentialsFile {
+    #[serde(rename = "claudeAiOauth")]
+    claude_ai_oauth: ClaudeOauthCredentials,
+}
+
+#[derive(Deserialize)]
+struct ClaudeRefreshResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CodexAuthTokens {
+    access_token: String,
+    refresh_token: String,
+    id_token: Option<String>,
+    account_id: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CodexAuthPayload {
+    #[serde(rename = "OPENAI_API_KEY")]
+    openai_api_key: Option<String>,
+    tokens: CodexAuthTokens,
+    last_refresh: Option<String>,
+}
+
+enum CodexCredentialSource {
+    File(PathBuf),
+    Keychain,
+}
+
+struct LoadedCodexCredentials {
+    auth: CodexAuthPayload,
+    source: CodexCredentialSource,
+}
+
+#[derive(Deserialize)]
+struct CodexRefreshResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    id_token: Option<String>,
+}
+
+fn claude_credentials_path() -> Result<PathBuf, String> {
+    let home = dirs_next().ok_or_else(|| "HOME not set".to_string())?;
+    Ok(home.join(".claude").join(".credentials.json"))
+}
+
+fn read_claude_credentials_from_file() -> Result<Option<ClaudeOauthCredentials>, String> {
+    let path = claude_credentials_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let data = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let credentials =
+        serde_json::from_str::<ClaudeCredentialsFile>(&data).map_err(|e| e.to_string())?;
+    Ok(Some(credentials.claude_ai_oauth))
+}
+
+fn read_claude_credentials_from_keychain() -> Result<Option<ClaudeOauthCredentials>, String> {
+    let output = Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    if stdout.trim().is_empty() {
+        return Ok(None);
+    }
+
+    if let Ok(file) = serde_json::from_str::<ClaudeCredentialsFile>(&stdout) {
+        return Ok(Some(file.claude_ai_oauth));
+    }
+
+    let credentials =
+        serde_json::from_str::<ClaudeOauthCredentials>(&stdout).map_err(|e| e.to_string())?;
+    Ok(Some(credentials))
+}
+
+fn load_claude_credentials() -> Result<ClaudeOauthCredentials, String> {
+    if let Some(credentials) = read_claude_credentials_from_file()? {
+        return Ok(credentials);
+    }
+
+    if let Some(credentials) = read_claude_credentials_from_keychain()? {
+        return Ok(credentials);
+    }
+
+    Err("claude_credentials_missing".to_string())
+}
+
+fn persist_claude_credentials(credentials: &ClaudeOauthCredentials) -> Result<(), String> {
+    let path = claude_credentials_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let payload = ClaudeCredentialsFile {
+        claude_ai_oauth: credentials.clone(),
+    };
+    let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn should_refresh_claude_token(credentials: &ClaudeOauthCredentials) -> bool {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    credentials.expires_at - now_ms <= 5 * 60 * 1000
+}
+
+async fn refresh_claude_token(
+    client: &reqwest::Client,
+    credentials: &mut ClaudeOauthCredentials,
+) -> Result<(), String> {
+    let response = client
+        .post("https://platform.claude.com/v1/oauth/token")
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": credentials.refresh_token,
+            "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+            "scope": "user:profile user:inference user:sessions:claude_code user:mcp_servers"
+        }))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("claude_token_refresh_failed:{}", response.status()));
+    }
+
+    let refreshed = response
+        .json::<ClaudeRefreshResponse>()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    credentials.access_token = refreshed.access_token;
+    if let Some(refresh_token) = refreshed.refresh_token {
+        credentials.refresh_token = refresh_token;
+    }
+    credentials.expires_at = chrono::Utc::now().timestamp_millis() + refreshed.expires_in * 1000;
+
+    persist_claude_credentials(credentials)?;
+    Ok(())
+}
+
+async fn request_claude_usage(
+    client: &reqwest::Client,
+    access_token: &str,
+) -> Result<reqwest::Response, String> {
+    client
+        .get("https://api.anthropic.com/api/oauth/usage")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn codex_auth_paths() -> Result<Vec<PathBuf>, String> {
+    let home = dirs_next().ok_or_else(|| "HOME not set".to_string())?;
+    let mut paths = Vec::new();
+
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        paths.push(PathBuf::from(codex_home).join("auth.json"));
+    }
+
+    paths.push(home.join(".config").join("codex").join("auth.json"));
+    paths.push(home.join(".codex").join("auth.json"));
+
+    Ok(paths)
+}
+
+fn read_codex_credentials_from_file() -> Result<Option<LoadedCodexCredentials>, String> {
+    for path in codex_auth_paths()? {
+        if !path.exists() {
+            continue;
+        }
+
+        let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let auth = serde_json::from_str::<CodexAuthPayload>(&data).map_err(|e| e.to_string())?;
+        return Ok(Some(LoadedCodexCredentials {
+            auth,
+            source: CodexCredentialSource::File(path),
+        }));
+    }
+
+    Ok(None)
+}
+
+fn read_codex_credentials_from_keychain() -> Result<Option<LoadedCodexCredentials>, String> {
+    let output = Command::new("security")
+        .args(["find-generic-password", "-s", "Codex Auth", "-w"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+    if stdout.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let auth = serde_json::from_str::<CodexAuthPayload>(&stdout).map_err(|e| e.to_string())?;
+    Ok(Some(LoadedCodexCredentials {
+        auth,
+        source: CodexCredentialSource::Keychain,
+    }))
+}
+
+fn load_codex_credentials() -> Result<LoadedCodexCredentials, String> {
+    if let Some(credentials) = read_codex_credentials_from_file()? {
+        return Ok(credentials);
+    }
+
+    if let Some(credentials) = read_codex_credentials_from_keychain()? {
+        return Ok(credentials);
+    }
+
+    Err("codex_credentials_missing".to_string())
+}
+
+fn persist_codex_credentials(credentials: &LoadedCodexCredentials) -> Result<(), String> {
+    let CodexCredentialSource::File(path) = &credentials.source else {
+        return Ok(());
+    };
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let json = serde_json::to_string_pretty(&credentials.auth).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn should_refresh_codex_token(credentials: &LoadedCodexCredentials) -> bool {
+    let Some(last_refresh) = &credentials.auth.last_refresh else {
+        return true;
+    };
+
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(last_refresh) else {
+        return true;
+    };
+
+    chrono::Utc::now() - parsed.with_timezone(&chrono::Utc) >= chrono::Duration::days(8)
+}
+
+async fn refresh_codex_token(
+    client: &reqwest::Client,
+    credentials: &mut LoadedCodexCredentials,
+) -> Result<(), String> {
+    let response = client
+        .post("https://auth.openai.com/oauth/token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", "app_EMoamEEZ73f0CkXaXp7hrann"),
+            (
+                "refresh_token",
+                credentials.auth.tokens.refresh_token.as_str(),
+            ),
+        ])
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("codex_token_refresh_failed:{}", response.status()));
+    }
+
+    let refreshed = response
+        .json::<CodexRefreshResponse>()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    credentials.auth.tokens.access_token = refreshed.access_token;
+    if let Some(refresh_token) = refreshed.refresh_token {
+        credentials.auth.tokens.refresh_token = refresh_token;
+    }
+    if let Some(id_token) = refreshed.id_token {
+        credentials.auth.tokens.id_token = Some(id_token);
+    }
+    credentials.auth.last_refresh = Some(chrono::Utc::now().to_rfc3339());
+
+    persist_codex_credentials(credentials)?;
+    Ok(())
+}
+
+async fn request_codex_usage(
+    client: &reqwest::Client,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> Result<reqwest::Response, String> {
+    let mut request = client
+        .get("https://chatgpt.com/backend-api/wham/usage")
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(10));
+
+    if let Some(account_id) = account_id {
+        request = request.header("ChatGPT-Account-Id", account_id);
+    }
+
+    request.send().await.map_err(|e| e.to_string())
+}
+
 // --- Tauri Commands ---
 
 #[tauri::command]
@@ -79,44 +417,45 @@ async fn start_auth_flow(app: AppHandle) -> Result<(), String> {
     let url = "https://ai-usage-dashboard-sage.vercel.app/api/auth/login?source=tailor";
 
     let app_handle = app.clone();
-    let _auth_window = WebviewWindowBuilder::new(&app, "auth", WebviewUrl::External(url.parse().unwrap()))
-        .title("Sign in to Tailor")
-        .inner_size(500.0, 700.0)
-        .center()
-        .visible(true)
-        .on_navigation(move |url: &url::Url| {
-            // After OAuth the dashboard redirects to /tailor-auth?token=<jwt>
-            // Intercept here in Rust before the page loads
-            let is_tailor_auth = url.host_str() == Some("ai-usage-dashboard-sage.vercel.app")
-                && url.path() == "/tailor-auth";
+    let _auth_window =
+        WebviewWindowBuilder::new(&app, "auth", WebviewUrl::External(url.parse().unwrap()))
+            .title("Sign in to Tailor")
+            .inner_size(500.0, 700.0)
+            .center()
+            .visible(true)
+            .on_navigation(move |url: &url::Url| {
+                // After OAuth the dashboard redirects to /tailor-auth?token=<jwt>
+                // Intercept here in Rust before the page loads
+                let is_tailor_auth = url.host_str() == Some("ai-usage-dashboard-sage.vercel.app")
+                    && url.path() == "/tailor-auth";
 
-            if is_tailor_auth {
-                let token = url
-                    .query_pairs()
-                    .find(|(k, _)| k == "token")
-                    .map(|(_, v)| v.to_string());
+                if is_tailor_auth {
+                    let token = url
+                        .query_pairs()
+                        .find(|(k, _)| k == "token")
+                        .map(|(_, v)| v.to_string());
 
-                if let Some(token) = token {
-                    persist_cookie(&app_handle, &token);
-                    if let Some(state) = app_handle.try_state::<AppState>() {
-                        state.auth.lock().unwrap().cookie = Some(token);
-                    }
-                    app_handle.emit("auth-success", ()).ok();
-                    // Close the auth window off the navigation callback to avoid deadlock
-                    let handle = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Some(w) = handle.get_webview_window("auth") {
-                            w.close().ok();
+                    if let Some(token) = token {
+                        persist_cookie(&app_handle, &token);
+                        if let Some(state) = app_handle.try_state::<AppState>() {
+                            state.auth.lock().unwrap().cookie = Some(token);
                         }
-                    });
-                }
+                        app_handle.emit("auth-success", ()).ok();
+                        // Close the auth window off the navigation callback to avoid deadlock
+                        let handle = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Some(w) = handle.get_webview_window("auth") {
+                                w.close().ok();
+                            }
+                        });
+                    }
 
-                return false; // cancel navigation — /tailor-auth is not a real page
-            }
-            true
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
+                    return false; // cancel navigation — /tailor-auth is not a real page
+                }
+                true
+            })
+            .build()
+            .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -167,13 +506,190 @@ async fn fetch_usage(
 }
 
 #[tauri::command]
+async fn fetch_claude_usage() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let mut credentials = load_claude_credentials()?;
+
+    if should_refresh_claude_token(&credentials) {
+        refresh_claude_token(&client, &mut credentials).await?;
+    }
+
+    let mut response = request_claude_usage(&client, &credentials.access_token).await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED
+        || response.status() == reqwest::StatusCode::FORBIDDEN
+    {
+        refresh_claude_token(&client, &mut credentials).await?;
+        response = request_claude_usage(&client, &credentials.access_token).await?;
+    }
+
+    if !response.status().is_success() {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|secs| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                now + secs
+            });
+        return Err(match retry_after {
+            Some(ts) => format!("claude_usage_failed:{}:{}", response.status(), ts),
+            None => format!("claude_usage_failed:{}", response.status()),
+        });
+    }
+
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_codex_usage() -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let mut credentials = load_codex_credentials()?;
+
+    if should_refresh_codex_token(&credentials) {
+        refresh_codex_token(&client, &mut credentials).await?;
+    }
+
+    let mut response = request_codex_usage(
+        &client,
+        &credentials.auth.tokens.access_token,
+        credentials.auth.tokens.account_id.as_deref(),
+    )
+    .await?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED
+        || response.status() == reqwest::StatusCode::FORBIDDEN
+    {
+        refresh_codex_token(&client, &mut credentials).await?;
+        response = request_codex_usage(
+            &client,
+            &credentials.auth.tokens.access_token,
+            credentials.auth.tokens.account_id.as_deref(),
+        )
+        .await?;
+    }
+
+    if !response.status().is_success() {
+        return Err(format!("codex_usage_failed:{}", response.status()));
+    }
+
+    response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// --- Dashboard log forwarding ---
+
+fn last_forwarded_path() -> Option<PathBuf> {
+    let home = dirs_next()?;
+    Some(home.join(".anthropic-proxy").join("last_forwarded.json"))
+}
+
+fn read_last_forwarded_ts() -> u64 {
+    let Some(path) = last_forwarded_path() else {
+        return 0;
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|v| v.get("ts")?.as_u64())
+        .unwrap_or(0)
+}
+
+fn write_last_forwarded_ts(ts: u64) {
+    let Some(path) = last_forwarded_path() else {
+        return;
+    };
+    fs::write(path, serde_json::json!({ "ts": ts }).to_string()).ok();
+}
+
+const DASHBOARD_INGEST_URL: &str =
+    "https://ai-usage-dashboard-sage.vercel.app/api/ingest";
+
+#[tauri::command]
+async fn forward_logs_to_dashboard() -> Result<usize, String> {
+    let last_ts = read_last_forwarded_ts();
+
+    let Some(home) = dirs_next() else {
+        return Ok(0);
+    };
+    let logs_dir = home.join(".anthropic-proxy").join("logs");
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let yesterday = (chrono::Utc::now() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+
+    for date in &[&yesterday, &today] {
+        let path = logs_dir.join(format!("{}.jsonl", date));
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let entry_ts = entry.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+            if entry_ts > last_ts {
+                entries.push(entry);
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return Ok(0);
+    }
+
+    let count = entries.len();
+
+    let client = reqwest::Client::builder()
+        .user_agent("TailorUsage")
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .post(DASHBOARD_INGEST_URL)
+        .json(&entries)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("ingest_failed:{}", resp.status().as_u16()));
+    }
+
+    let now_ts = chrono::Utc::now().timestamp_millis() as u64;
+    write_last_forwarded_ts(now_ts);
+
+    Ok(count)
+}
+
+#[tauri::command]
 fn read_local_logs(date: String) -> Vec<serde_json::Value> {
-    let Some(home) = dirs_next() else { return vec![] };
+    let Some(home) = dirs_next() else {
+        return vec![];
+    };
     let path = home
         .join(".anthropic-proxy")
         .join("logs")
         .join(format!("{}.jsonl", date));
-    let Ok(content) = fs::read_to_string(&path) else { return vec![] };
+    let Ok(content) = fs::read_to_string(&path) else {
+        return vec![];
+    };
     content
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -190,54 +706,21 @@ fn set_tray_title(app: AppHandle, title: String) {
 
 #[tauri::command]
 fn check_proxy_running() -> bool {
-    TcpStream::connect_timeout(
+    let anthropic_ok = TcpStream::connect_timeout(
         &"127.0.0.1:8787".parse().unwrap(),
         Duration::from_millis(500),
     )
-    .is_ok()
-}
-
-#[derive(Serialize, Deserialize)]
-#[allow(dead_code)]
-struct ProxySettings {
-    share_diagnostics: bool,
-}
-
-fn proxy_settings_path() -> PathBuf {
-    let home = dirs_next().unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".anthropic-proxy").join("settings.json")
+    .is_ok();
+    let openai_ok = TcpStream::connect_timeout(
+        &"127.0.0.1:8788".parse().unwrap(),
+        Duration::from_millis(500),
+    )
+    .is_ok();
+    anthropic_ok && openai_ok
 }
 
 fn dirs_next() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
-}
-
-#[tauri::command]
-fn get_proxy_settings() -> Result<serde_json::Value, String> {
-    let path = proxy_settings_path();
-    let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let settings: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
-    Ok(settings)
-}
-
-#[tauri::command]
-fn set_proxy_settings(share_diagnostics: bool) -> Result<(), String> {
-    let path = proxy_settings_path();
-
-    // Read existing settings, update share_diagnostics
-    let mut settings: serde_json::Value = if path.exists() {
-        let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&data).unwrap_or(serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    settings["share_diagnostics"] = serde_json::Value::Bool(share_diagnostics);
-
-    fs::write(&path, serde_json::to_string_pretty(&settings).unwrap())
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
 }
 
 // --- Preferences ---
@@ -262,7 +745,7 @@ fn get_preferences(app: AppHandle) -> serde_json::Value {
         .ok()
         .and_then(|d| serde_json::from_str(&d).ok())
         .unwrap_or(serde_json::json!({
-            "poll_interval": 60000,
+            "poll_interval": 900000,
             "tray_display": "tokens"
         }))
 }
@@ -270,9 +753,78 @@ fn get_preferences(app: AppHandle) -> serde_json::Value {
 #[tauri::command]
 fn set_preferences(app: AppHandle, prefs: serde_json::Value) -> Result<(), String> {
     let path = preferences_path(&app);
-    fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap())
-        .map_err(|e| e.to_string())?;
+    fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap()).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// --- Update ---
+
+#[derive(Serialize)]
+struct UpdateInfo {
+    available: bool,
+    latest_version: String,
+    download_url: String,
+}
+
+#[tauri::command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+async fn check_for_update() -> Result<UpdateInfo, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("TailorUsage")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("https://api.github.com/repos/TailorHub-Mad/TailorUsage/releases/latest")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API error: {}", resp.status()));
+    }
+
+    let release: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let latest_version = release["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+
+    let download_url = release["assets"]
+        .as_array()
+        .and_then(|assets| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str().unwrap_or("").ends_with(".dmg"))
+        })
+        .and_then(|a| a["browser_download_url"].as_str())
+        .unwrap_or(release["html_url"].as_str().unwrap_or(""))
+        .to_string();
+
+    let current = env!("CARGO_PKG_VERSION");
+    let available = !latest_version.is_empty() && latest_version != current;
+
+    Ok(UpdateInfo {
+        available,
+        latest_version,
+        download_url,
+    })
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 // --- Proxy lifecycle commands ---
@@ -341,18 +893,103 @@ fn load_proxy_enabled_pref(app: &AppHandle) -> bool {
 
 // --- App Setup ---
 
-fn toggle_popover(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else { return; };
+fn resize_and_center_main_window(window: &tauri::WebviewWindow) {
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let scale = monitor.scale_factor();
+        let monitor_x = monitor.position().x as f64 / scale;
+        let monitor_y = monitor.position().y as f64 / scale;
+        let monitor_width = monitor.size().width as f64 / scale;
+        let monitor_height = monitor.size().height as f64 / scale;
+        let width = 450.0;
+        let height = 600.0;
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))
+            .ok();
+        window
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                monitor_x + (monitor_width - width) / 2.0,
+                monitor_y + (monitor_height - height) / 2.0,
+            )))
+            .ok();
+        return;
+    }
+    window.center().ok();
+}
+
+fn position_main_window_from_tray_icon(window: &tauri::WebviewWindow, icon_rect: tauri::Rect) {
+    let width = 450.0;
+    let height = 600.0;
+    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+
+    if let Ok(monitors) = window.available_monitors() {
+        if let Some((monitor, icon_position, icon_size)) =
+            monitors.into_iter().find_map(|monitor| {
+                let scale = monitor.scale_factor();
+                let icon_position = icon_rect.position.to_physical::<f64>(scale);
+                let icon_size = icon_rect.size.to_physical::<f64>(scale);
+                let position = monitor.position();
+                let size = monitor.size();
+                let left = position.x as f64;
+                let top = position.y as f64;
+                let right = left + size.width as f64;
+                let bottom = top + size.height as f64;
+                let icon_center_x = icon_position.x + (icon_size.width / 2.0);
+                let icon_top_y = icon_position.y;
+
+                (icon_center_x >= left
+                    && icon_center_x <= right
+                    && icon_top_y >= top
+                    && icon_top_y <= bottom)
+                    .then_some((monitor, icon_position, icon_size))
+            })
+        {
+            let scale = monitor.scale_factor();
+            let monitor_x = monitor.position().x as f64 / scale;
+            let monitor_y = monitor.position().y as f64 / scale;
+            let monitor_width = monitor.size().width as f64 / scale;
+            let icon_center_x = (icon_position.x + (icon_size.width / 2.0)) / scale;
+            let icon_bottom_y = (icon_position.y + icon_size.height) / scale;
+            let horizontal_margin = 12.0;
+            let y_offset = 8.0;
+
+            let x = (icon_center_x - (width / 2.0)).clamp(
+                monitor_x + horizontal_margin,
+                monitor_x + monitor_width - width - horizontal_margin,
+            );
+            let y = (icon_bottom_y + y_offset).max(monitor_y + y_offset);
+
+            let _ =
+                window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+            return;
+        }
+    }
+
+    resize_and_center_main_window(window);
+}
+
+fn toggle_popover(app: &AppHandle, icon_rect: Option<tauri::Rect>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
     if window.is_visible().unwrap_or(false) {
         window.hide().ok();
     } else {
         if let Some(state) = app.try_state::<AppState>() {
             *state.last_shown.lock().unwrap() = Some(Instant::now());
         }
-        window.center().ok();
+        if let Some(icon_rect) = icon_rect {
+            position_main_window_from_tray_icon(&window, icon_rect);
+        } else {
+            resize_and_center_main_window(&window);
+        }
         window.show().ok();
         window.set_focus().ok();
     }
+}
+
+#[tauri::command]
+fn keep_window_visible(state: tauri::State<'_, AppState>) {
+    *state.last_shown.lock().unwrap() = Some(Instant::now());
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -376,17 +1013,20 @@ pub fn run() {
                 .build()?;
 
             let tray = TrayIconBuilder::with_id("main")
-                .icon(Image::from_bytes(include_bytes!("../icons/new-icon.png"))
-                    .expect("tray icon"))
+                .icon(
+                    Image::from_bytes(include_bytes!("../icons/new-icon.png")).expect("tray icon"),
+                )
                 .title("--")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(move |_tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {
-                        button_state: tauri::tray::MouseButtonState::Up, ..
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        rect,
+                        ..
                     } = event
                     {
-                        toggle_popover(&app_handle);
+                        toggle_popover(&app_handle, Some(rect));
                     }
                 })
                 .on_menu_event(move |_app, event| {
@@ -420,24 +1060,21 @@ pub fn run() {
             });
 
             // Create the hidden popover window
-            let _window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::default(),
-            )
-            .title("TailorUsage")
-            .inner_size(440.0, 620.0)
-            .decorations(false)
-            .transparent(true)
-            .shadow(true)
-            .skip_taskbar(true)
-            .visible(false)
-            .center()
-            .build()?;
+            let _window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                .title("TailorUsage")
+                .inner_size(450.0, 600.0)
+                .decorations(false)
+                .transparent(true)
+                .shadow(true)
+                .skip_taskbar(true)
+                .visible(false)
+                .center()
+                .build()?;
 
             // Hide popover on blur (with 800ms guard to avoid hiding right after show)
             let app_handle2 = app.handle().clone();
             if let Some(window) = app.get_webview_window("main") {
+                resize_and_center_main_window(&window);
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Focused(false) = event {
                         if let Some(state) = app_handle2.try_state::<AppState>() {
@@ -464,16 +1101,21 @@ pub fn run() {
             start_auth_flow,
             fetch_metrics,
             fetch_usage,
+            fetch_claude_usage,
+            fetch_codex_usage,
             read_local_logs,
             set_tray_title,
             check_proxy_running,
-            get_proxy_settings,
-            set_proxy_settings,
             get_preferences,
             set_preferences,
             start_proxy,
             stop_proxy,
             get_proxy_enabled,
+            get_app_version,
+            check_for_update,
+            open_url,
+            keep_window_visible,
+            forward_logs_to_dashboard,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

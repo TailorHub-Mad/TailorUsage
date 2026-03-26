@@ -4,13 +4,15 @@ import { usePolling } from "./usePolling";
 import { useStore } from "../store";
 
 const apiMocks = vi.hoisted(() => ({
+  fetchClaudeUsage: vi.fn(),
+  fetchCodexUsage: vi.fn(),
   fetchMetrics: vi.fn(),
   fetchUsage: vi.fn(),
   readLocalLogs: vi.fn(),
   getProxyEnabled: vi.fn(),
-  getProxySettings: vi.fn(),
   setTrayTitle: vi.fn(),
   clearAuthCookie: vi.fn(),
+  forwardLogsToDashboard: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => apiMocks);
@@ -20,10 +22,14 @@ function resetStore() {
     isAuthenticated: true,
     cookie: "cookie-123",
     metrics: null,
+    claudeUsage: null,
+    claudeUsageError: null,
+    codexUsage: null,
+    codexUsageError: null,
     todayLogs: [],
     weekLogs: [],
-    proxyStatus: { running: false, enabled: false, shareDiagnostics: false },
-    preferences: { poll_interval: 60000, tray_display: "cost" },
+    proxyStatus: { running: false, enabled: false },
+    preferences: { poll_interval: 900000, tray_display: "cost" },
     loading: false,
     error: null,
   });
@@ -42,6 +48,7 @@ describe("usePolling", () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
+    apiMocks.forwardLogsToDashboard.mockResolvedValue(0);
   });
 
   it("hydrates dashboard state from local logs and API data", async () => {
@@ -77,6 +84,8 @@ describe("usePolling", () => {
         },
       ],
     });
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
     apiMocks.fetchUsage.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -107,7 +116,6 @@ describe("usePolling", () => {
         }),
     );
     apiMocks.getProxyEnabled.mockResolvedValue(true);
-    apiMocks.getProxySettings.mockResolvedValue({ share_diagnostics: true });
 
     renderHook(() => usePolling());
 
@@ -121,19 +129,194 @@ describe("usePolling", () => {
     expect(useStore.getState().proxyStatus).toEqual({
       running: true,
       enabled: true,
-      shareDiagnostics: true,
     });
     expect(apiMocks.setTrayTitle).toHaveBeenCalledWith("$0.01");
     expect(useStore.getState().error).toBeNull();
   });
 
+  it("shows daily usage percent in the tray when token display is selected", async () => {
+    const today = isoDate(0);
+
+    useStore.setState({
+      preferences: { poll_interval: 900000, tray_display: "tokens" },
+    });
+
+    apiMocks.readLocalLogs.mockResolvedValue([
+      {
+        ts: `${today}T10:00:00.000Z`,
+        request_id: "local-today-1",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        model: "claude-sonnet-4",
+        input_tokens: 1000,
+        output_tokens: 500,
+      },
+    ]);
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(apiMocks.setTrayTitle).toHaveBeenCalledWith("<1%");
+    });
+  });
+
+  it("uses exact Claude session usage in the tray when available", async () => {
+    const today = isoDate(0);
+
+    useStore.setState({
+      preferences: { poll_interval: 900000, tray_display: "tokens" },
+    });
+
+    apiMocks.readLocalLogs.mockResolvedValue([
+      {
+        ts: `${today}T10:00:00.000Z`,
+        request_id: "local-today-1",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        model: "claude-sonnet-4",
+        input_tokens: 1000,
+        output_tokens: 500,
+      },
+    ]);
+    apiMocks.fetchClaudeUsage.mockResolvedValue({
+      five_hour: { utilization: 17, resets_at: "2026-03-26T18:00:00.000Z" },
+      seven_day: { utilization: 23, resets_at: "2026-03-28T18:00:00.000Z" },
+    });
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(apiMocks.setTrayTitle).toHaveBeenCalledWith("17%");
+    });
+  });
+
+  it("uses exact Codex session usage when the latest activity is openai", async () => {
+    const today = isoDate(0);
+
+    useStore.setState({
+      preferences: { poll_interval: 900000, tray_display: "tokens" },
+    });
+
+    apiMocks.readLocalLogs.mockResolvedValue([
+      {
+        ts: `${today}T10:00:00.000Z`,
+        request_id: "local-claude-1",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        provider: "anthropic",
+        model: "claude-sonnet-4",
+        input_tokens: 100,
+        output_tokens: 100,
+      },
+      {
+        ts: `${today}T11:00:00.000Z`,
+        request_id: "local-codex-1",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        provider: "openai",
+        model: "gpt-5-codex",
+        input_tokens: 100,
+        output_tokens: 100,
+      },
+    ]);
+    apiMocks.fetchClaudeUsage.mockResolvedValue({
+      five_hour: { utilization: 17, resets_at: "2026-03-26T18:00:00.000Z" },
+    });
+    apiMocks.fetchCodexUsage.mockResolvedValue({
+      rate_limit: {
+        primary_window: { used_percent: 6, reset_at: 1774556460, limit_window_seconds: 18000 },
+      },
+    });
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(apiMocks.setTrayTitle).toHaveBeenCalledWith("6%");
+    });
+  });
+
+  it("stores a Claude 429 as a provider usage error without failing the whole poll", async () => {
+    const today = isoDate(0);
+
+    apiMocks.readLocalLogs.mockResolvedValue([
+      {
+        ts: `${today}T10:00:00.000Z`,
+        request_id: "local-today-1",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        model: "claude-sonnet-4",
+        input_tokens: 1000,
+        output_tokens: 500,
+      },
+    ]);
+    apiMocks.fetchClaudeUsage.mockRejectedValue(new Error("claude_usage_failed:429 Too Many Requests"));
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().claudeUsageError).toBe(
+        "Usage request failed (HTTP 429). Try again later.",
+      );
+    });
+
+    expect(useStore.getState().error).toBeNull();
+  });
+
+  it("includes reset time in Claude 429 error when retry-after timestamp is present", async () => {
+    const today = isoDate(0);
+    const retryAt = Math.floor(Date.now() / 1000) + 3 * 60 * 60; // 3h from now
+
+    apiMocks.readLocalLogs.mockResolvedValue([
+      {
+        ts: `${today}T10:00:00.000Z`,
+        request_id: "local-today-2",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        model: "claude-sonnet-4",
+        input_tokens: 100,
+        output_tokens: 50,
+      },
+    ]);
+    apiMocks.fetchClaudeUsage.mockRejectedValue(
+      new Error(`claude_usage_failed:429 Too Many Requests:${retryAt}`),
+    );
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      const err = useStore.getState().claudeUsageError;
+      expect(err).toMatch(/Usage request failed \(HTTP 429\)\. Resets in/);
+    });
+  });
+
   it("clears auth and signs out after an unauthorized retry failure", async () => {
     vi.useFakeTimers();
     apiMocks.readLocalLogs.mockResolvedValue([]);
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
     apiMocks.fetchMetrics.mockRejectedValue(new Error("unauthorized"));
     apiMocks.fetchUsage.mockResolvedValue({ data: [] });
     apiMocks.getProxyEnabled.mockResolvedValue(false);
-    apiMocks.getProxySettings.mockResolvedValue({ share_diagnostics: false });
 
     const { unmount } = renderHook(() => usePolling());
 
@@ -199,9 +382,10 @@ describe("usePolling", () => {
         },
       ],
     });
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
     apiMocks.fetchUsage.mockResolvedValue({ data: [] });
     apiMocks.getProxyEnabled.mockResolvedValue(false);
-    apiMocks.getProxySettings.mockResolvedValue({ share_diagnostics: false });
 
     renderHook(() => usePolling());
 
@@ -271,9 +455,10 @@ describe("usePolling", () => {
         },
       ],
     });
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
     apiMocks.fetchUsage.mockResolvedValue({ data: [] });
     apiMocks.getProxyEnabled.mockResolvedValue(false);
-    apiMocks.getProxySettings.mockResolvedValue({ share_diagnostics: false });
 
     renderHook(() => usePolling());
 

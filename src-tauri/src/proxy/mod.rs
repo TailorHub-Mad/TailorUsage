@@ -66,8 +66,7 @@ pub fn start(config: ProxyConfig) -> Result<ProxyHandle, String> {
     let openai_rx = shutdown_rx;
     let openai_port = config.openai_port;
     runtime.spawn(async move {
-        if let Err(e) =
-            server::run_listener(types::Provider::Openai, openai_port, openai_rx).await
+        if let Err(e) = server::run_listener(types::Provider::Openai, openai_port, openai_rx).await
         {
             log::error!("OpenAI proxy error: {}", e);
         }

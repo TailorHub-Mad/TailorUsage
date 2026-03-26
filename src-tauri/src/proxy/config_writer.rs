@@ -53,7 +53,11 @@ pub fn enable_shell_profiles(anthropic_port: u16, openai_port: u16) -> Result<()
     let home = home_dir().ok_or("Cannot determine home directory")?;
     let block = proxy_block(anthropic_port, openai_port);
 
-    let profiles = vec![home.join(".zshrc"), home.join(".bashrc")];
+    let profiles = vec![
+        home.join(".zshenv"),
+        home.join(".zshrc"),
+        home.join(".bashrc"),
+    ];
 
     for profile_path in profiles {
         if !profile_path.exists()
@@ -87,7 +91,11 @@ pub fn enable_shell_profiles(anthropic_port: u16, openai_port: u16) -> Result<()
 pub fn disable_shell_profiles() -> Result<(), String> {
     let home = home_dir().ok_or("Cannot determine home directory")?;
 
-    let profiles = vec![home.join(".zshrc"), home.join(".bashrc")];
+    let profiles = vec![
+        home.join(".zshenv"),
+        home.join(".zshrc"),
+        home.join(".bashrc"),
+    ];
 
     for profile_path in profiles {
         if !profile_path.exists() {

@@ -1,5 +1,40 @@
 use crate::proxy::types::StreamAccumulator;
 
+fn meaningful_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && !value.eq_ignore_ascii_case("unknown")
+                && !value.eq_ignore_ascii_case("null")
+                && !value.eq_ignore_ascii_case("undefined")
+        })
+        .map(str::to_string)
+}
+
+fn string_at_path(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+
+    for key in path {
+        current = current.get(*key)?;
+    }
+
+    meaningful_string(current.as_str())
+}
+
+fn extract_openai_model(value: &serde_json::Value) -> Option<String> {
+    [
+        &["model"][..],
+        &["response", "model"],
+        &["response", "response", "model"],
+        &["response", "body", "model"],
+        &["data", "model"],
+        &["data", "response", "model"],
+    ]
+    .iter()
+    .find_map(|path| string_at_path(value, path))
+}
+
 /// Parse a single Anthropic SSE event and update the accumulator.
 ///
 /// Anthropic SSE format:
@@ -17,9 +52,18 @@ pub fn parse_anthropic_event(event_type: &str, data: &str, acc: &mut StreamAccum
                     acc.model = Some(model.to_string());
                 }
                 if let Some(usage) = msg.get("usage") {
-                    let input = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                    let cache_creation = usage.get("cache_creation_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                    let cache_read = usage.get("cache_read_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                    let input = usage
+                        .get("input_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
+                    let cache_creation = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
+                    let cache_read = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
                     acc.input_tokens = Some(input + cache_creation + cache_read);
                 }
             }
@@ -59,14 +103,8 @@ pub fn parse_openai_chunk(data: &str, acc: &mut StreamAccumulator) {
 
     // Model from first chunk
     if acc.model.is_none() {
-        if let Some(model) = v.get("model").and_then(|m| m.as_str()) {
-            acc.model = Some(model.to_string());
-        } else if let Some(model) = v
-            .get("response")
-            .and_then(|r| r.get("model"))
-            .and_then(|m| m.as_str())
-        {
-            acc.model = Some(model.to_string());
+        if let Some(model) = extract_openai_model(&v) {
+            acc.model = Some(model);
         }
     }
 
@@ -102,6 +140,40 @@ pub fn parse_openai_chunk(data: &str, acc: &mut StreamAccumulator) {
         if let Some(output) = usage.get("output_tokens").and_then(|t| t.as_u64()) {
             acc.output_tokens = Some(output);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_openai_model, parse_openai_chunk};
+    use crate::proxy::types::StreamAccumulator;
+
+    #[test]
+    fn extracts_nested_openai_model_from_sse_chunk() {
+        let chunk = serde_json::json!({
+            "model": "unknown",
+            "response": {
+                "body": {
+                    "model": "gpt-5.4"
+                }
+            }
+        });
+
+        assert_eq!(extract_openai_model(&chunk), Some("gpt-5.4".to_string()));
+    }
+
+    #[test]
+    fn parses_model_and_usage_from_openai_chunk() {
+        let mut acc = StreamAccumulator::default();
+
+        parse_openai_chunk(
+            r#"{"response":{"model":"gpt-5.4","usage":{"input_tokens":120,"output_tokens":30}}}"#,
+            &mut acc,
+        );
+
+        assert_eq!(acc.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(acc.input_tokens, Some(120));
+        assert_eq!(acc.output_tokens, Some(30));
     }
 }
 

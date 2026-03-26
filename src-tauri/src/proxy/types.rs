@@ -40,7 +40,6 @@ pub struct LogEntry {
     pub output_tokens: u64,
     pub stop_reason: String,
     pub error_message: Option<String>,
-    pub share_diagnostics: bool,
 }
 
 #[derive(Debug, Clone)]

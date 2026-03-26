@@ -88,13 +88,14 @@ export function WeekSection() {
         <>
           <div className="mb-3 h-28" aria-label="Weekly activity chart">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={weekActivity} margin={{ top: 8, right: 4, left: -24, bottom: 0 }}>
+              <LineChart data={weekActivity} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke="#f3f4f6" strokeDasharray="3 3" vertical={false} />
                 <XAxis
                   dataKey="label"
                   axisLine={false}
                   tickLine={false}
                   tick={{ fill: "#9ca3af", fontSize: 10 }}
+                  padding={{ left: 12, right: 12 }}
                 />
                 <YAxis hide domain={[0, "dataMax + 2"]} />
                 <Tooltip

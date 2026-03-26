@@ -29,6 +29,22 @@ function getString(source: unknown, paths: string[][]): string | null {
   return null;
 }
 
+function getMeaningfulString(source: unknown, paths: string[][]): string | null {
+  for (const path of paths) {
+    const value = getString(source, [path]);
+    if (!value) continue;
+
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "unknown" || normalized === "null" || normalized === "undefined") {
+      continue;
+    }
+
+    return value;
+  }
+
+  return null;
+}
+
 function getNumber(source: unknown, paths: string[][]): number | null {
   for (const path of paths) {
     const value = getPath(source, path);
@@ -106,7 +122,18 @@ export function normalizeLogRecord(raw: unknown): LogRecord | null {
   if (!record) return null;
 
   const endpoint = getString(record, [["endpoint"], ["path"], ["url_path"], ["request", "path"]]) ?? "";
-  const model = getString(record, [["model"], ["model_name"], ["response", "model"], ["request", "model"]]) ?? "";
+  const model =
+    getMeaningfulString(record, [
+      ["model"],
+      ["model_name"],
+      ["response", "model"],
+      ["response", "response", "model"],
+      ["response", "body", "model"],
+      ["data", "model"],
+      ["data", "response", "model"],
+      ["request", "model"],
+      ["request", "body", "model"],
+    ]) ?? "";
   const provider =
     normalizeProvider(record.provider) ??
     inferProvider(endpoint, model);
