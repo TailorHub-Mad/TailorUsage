@@ -1,7 +1,5 @@
 import { Component, useEffect, type ReactNode } from "react";
 import { useStore } from "./store";
-import { useAuth } from "./hooks/useAuth";
-import { AuthScreen } from "./components/AuthScreen";
 import { PopoverPanel } from "./components/PopoverPanel";
 import { checkForUpdate, getAppVersion } from "./lib/api";
 
@@ -25,22 +23,20 @@ class ErrorBoundary extends Component<
 }
 
 function App() {
-  useAuth();
-  const { isAuthenticated, setUpdateInfo, setAppVersion } = useStore();
+  const { setUpdateInfo, setAppVersion } = useStore();
 
   useEffect(() => {
     getAppVersion().then(setAppVersion).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
     checkForUpdate().then(setUpdateInfo).catch(() => {});
-  }, [isAuthenticated]);
+  }, [setUpdateInfo]);
 
   return (
     <ErrorBoundary>
       <div className="h-full">
-        {isAuthenticated ? <PopoverPanel /> : <AuthScreen />}
+        <PopoverPanel />
       </div>
     </ErrorBoundary>
   );

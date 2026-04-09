@@ -5,18 +5,15 @@ import { Footer } from "./Footer";
 import { useStore } from "../store";
 
 const apiMocks = vi.hoisted(() => ({
-  clearAuthCookie: vi.fn(),
   setPreferences: vi.fn(),
-  openLogsFolder: vi.fn(),
-  openUrl: vi.fn(),
 }));
 
 vi.mock("../lib/api", () => apiMocks);
 
 function resetStore() {
   useStore.setState({
-    isAuthenticated: true,
-    cookie: "cookie-123",
+    isAuthenticated: false,
+    cookie: null,
     metrics: null,
     claudeUsage: null,
     claudeUsageError: null,
@@ -37,18 +34,19 @@ describe("Footer", () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
-    apiMocks.clearAuthCookie.mockResolvedValue(undefined);
     apiMocks.setPreferences.mockResolvedValue(undefined);
-    apiMocks.openLogsFolder.mockResolvedValue(undefined);
-    apiMocks.openUrl.mockResolvedValue(undefined);
   });
 
-  it("opens the local logs folder from the footer", async () => {
+  it("updates the polling interval preference", async () => {
     const user = userEvent.setup();
     render(<Footer />);
 
-    await user.click(screen.getByRole("button", { name: "Open Logs" }));
+    await user.click(screen.getByRole("button", { name: "5m" }));
 
-    expect(apiMocks.openLogsFolder).toHaveBeenCalledTimes(1);
+    expect(apiMocks.setPreferences).toHaveBeenCalledWith({
+      poll_interval: 300000,
+      tray_display: "tokens",
+    });
+    expect(useStore.getState().preferences.poll_interval).toBe(300000);
   });
 });

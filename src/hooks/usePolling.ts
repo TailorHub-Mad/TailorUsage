@@ -4,13 +4,12 @@ import {
   fetchClaudeUsage,
   fetchCodexUsage,
   fetchMetrics,
-    fetchUsage,
-    readLocalLogs,
-    getProxyEnabled,
-    setTrayTitle,
-    clearAuthCookie,
-    forwardLogsToDashboard,
-  } from "../lib/api";
+  fetchUsage,
+  readLocalLogs,
+  getProxyEnabled,
+  setTrayTitle,
+  forwardLogsToDashboard,
+} from "../lib/api";
 import { calculateCost } from "../lib/cost";
 import { formatCost } from "../lib/format";
 import { DAILY_LIMIT, formatResetTime, formatUsagePercent, totalTokens } from "../lib/usage";
@@ -30,7 +29,25 @@ function parseRetryAfterTimestamp(error: unknown): number | null {
   return match ? Number(match[1]) : null;
 }
 
-function formatProviderUsageError(error: unknown): string {
+function rawErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isProviderLoginRequiredError(provider: "claude" | "openai", error: unknown): boolean {
+  const message = rawErrorMessage(error);
+  const statusCode = parseStatusCode(error);
+
+  if (provider === "claude" && message === "claude_credentials_missing") return true;
+  if (provider === "openai" && message === "codex_credentials_missing") return true;
+
+  return statusCode === 401 || statusCode === 403;
+}
+
+function formatProviderUsageError(provider: "claude" | "openai", error: unknown): string {
+  if (isProviderLoginRequiredError(provider, error)) {
+    return "Login required";
+  }
+
   const statusCode = parseStatusCode(error);
   if (statusCode) {
     const retryAt = parseRetryAfterTimestamp(error);
@@ -166,7 +183,6 @@ function currentWeekDateStrings(): string[] {
 
 export function usePolling() {
   const {
-    isAuthenticated,
     cookie,
     preferences,
     setMetrics,
@@ -179,7 +195,6 @@ export function usePolling() {
     setProxyStatus,
     setLoading,
     setError,
-    signOut,
   } = useStore();
 
   const slowIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -189,8 +204,6 @@ export function usePolling() {
   const myIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!isAuthenticated || !cookie) return;
-
     // Fast poll: read today's logs directly from the local proxy JSONL file
     const pollLocalLogs = async () => {
       try {
@@ -227,11 +240,15 @@ export function usePolling() {
 
         const [metricsRes, weekRes, claudeUsageResult, codexUsageResult, localWeekRaw, proxyEnabled] =
           await Promise.all([
-            fetchMetricsWithRetry(cookie).catch((e: unknown) => {
-              if (isUnauthorizedError(e)) throw e;
-              return null;
-            }),
-            fetchUsage(cookie, weekStartStr(), todayStr()).catch(() => null),
+            cookie
+              ? fetchMetricsWithRetry(cookie).catch((e: unknown) => {
+                  if (isUnauthorizedError(e)) throw e;
+                  return null;
+                })
+              : Promise.resolve(null),
+            cookie
+              ? fetchUsage(cookie, weekStartStr(), todayStr()).catch(() => null)
+              : Promise.resolve(null),
             fetchClaudeUsage()
               .then((data) => ({ data, error: null }))
               .catch((error: unknown) => ({ data: null, error })),
@@ -244,11 +261,11 @@ export function usePolling() {
 
         setClaudeUsage((claudeUsageResult.data as ClaudeUsage | null) ?? null);
         setClaudeUsageError(
-          claudeUsageResult.error ? formatProviderUsageError(claudeUsageResult.error) : null,
+          claudeUsageResult.error ? formatProviderUsageError("claude", claudeUsageResult.error) : null,
         );
         setCodexUsage((codexUsageResult.data as CodexUsage | null) ?? null);
         setCodexUsageError(
-          codexUsageResult.error ? formatProviderUsageError(codexUsageResult.error) : null,
+          codexUsageResult.error ? formatProviderUsageError("openai", codexUsageResult.error) : null,
         );
 
         const normalizedLocalWeekLogs = normalizeLogRecords(localWeekRaw.flat());
@@ -305,13 +322,7 @@ export function usePolling() {
         // Forward any new proxy logs to the shared dashboard (fire-and-forget)
         forwardLogsToDashboard().catch(() => {});
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg === "unauthorized") {
-          await clearAuthCookie();
-          signOut();
-          return;
-        }
-        setError(msg);
+        setError(e instanceof Error ? e.message : String(e));
       } finally {
         setLoading(false);
       }
@@ -336,7 +347,6 @@ export function usePolling() {
       if (slowIntervalRef.current) clearInterval(slowIntervalRef.current);
     };
   }, [
-    isAuthenticated,
     cookie,
     preferences.poll_interval,
     preferences.tray_display,
@@ -350,7 +360,6 @@ export function usePolling() {
     setProxyStatus,
     setLoading,
     setError,
-    signOut,
   ]);
 
   return {

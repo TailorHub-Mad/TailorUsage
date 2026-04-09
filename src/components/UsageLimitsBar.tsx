@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
 import { useStore } from "../store";
+import { openUrl } from "../lib/api";
 import { DAILY_LIMIT, WEEKLY_LIMIT, formatResetTime, totalTokens, usagePercent } from "../lib/usage";
+
+const CLAUDE_LOGIN_URL = "https://claude.ai/login";
+const OPENAI_LOGIN_URL = "https://chatgpt.com/auth/login";
+const LOGIN_REQUIRED_ERROR = "Login required";
 
 function LimitRow({
   label,
@@ -73,6 +78,33 @@ function ErrorRow({ message }: { message: string }) {
   );
 }
 
+function LoginPrompt({
+  provider,
+  description,
+  url,
+}: {
+  provider: string;
+  description: string;
+  url: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-gray-800">Log in to {provider}</div>
+          <div className="mt-1 text-xs text-gray-500">{description}</div>
+        </div>
+        <button
+          onClick={() => openUrl(url).catch(() => {})}
+          className="shrink-0 rounded-lg bg-gray-900 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-gray-700"
+        >
+          Log in
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ProviderSection({
   title,
   active = true,
@@ -119,10 +151,19 @@ export function UsageLimitsBar() {
     codexUsage?.code_review_rate_limit?.primary_window ||
     codexUsage?.credits?.has_credits,
   );
+  const claudeNeedsLogin = claudeUsageError === LOGIN_REQUIRED_ERROR;
+  const codexNeedsLogin = codexUsageError === LOGIN_REQUIRED_ERROR;
+
   return (
     <div className="px-4 pt-3 pb-2.5 flex flex-col gap-3 border-b border-gray-100">
       <ProviderSection title="Claude" active={hasClaudeUsage}>
-        {claudeUsageError ? (
+        {claudeNeedsLogin ? (
+          <LoginPrompt
+            provider="Claude"
+            description="Connect your Claude session to view live limits."
+            url={CLAUDE_LOGIN_URL}
+          />
+        ) : claudeUsageError ? (
           <ErrorRow message={claudeUsageError} />
         ) : claudeUsage?.five_hour ? (
           <>
@@ -156,7 +197,13 @@ export function UsageLimitsBar() {
       </ProviderSection>
 
       <ProviderSection title="OpenAI" active={hasCodexUsage}>
-        {codexUsageError ? (
+        {codexNeedsLogin ? (
+          <LoginPrompt
+            provider="OpenAI"
+            description="Connect your OpenAI session to view live limits."
+            url={OPENAI_LOGIN_URL}
+          />
+        ) : codexUsageError ? (
           <ErrorRow message={codexUsageError} />
         ) : codexUsage?.rate_limit?.primary_window ? (
           <>

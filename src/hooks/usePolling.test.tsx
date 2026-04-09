@@ -11,7 +11,6 @@ const apiMocks = vi.hoisted(() => ({
   readLocalLogs: vi.fn(),
   getProxyEnabled: vi.fn(),
   setTrayTitle: vi.fn(),
-  clearAuthCookie: vi.fn(),
   forwardLogsToDashboard: vi.fn(),
 }));
 
@@ -19,7 +18,7 @@ vi.mock("../lib/api", () => apiMocks);
 
 function resetStore() {
   useStore.setState({
-    isAuthenticated: true,
+    isAuthenticated: false,
     cookie: "cookie-123",
     metrics: null,
     claudeUsage: null,
@@ -309,25 +308,65 @@ describe("usePolling", () => {
     });
   });
 
-  it("clears auth and signs out after an unauthorized retry failure", async () => {
-    vi.useFakeTimers();
+  it("marks Claude usage as login required when credentials are missing", async () => {
+    apiMocks.readLocalLogs.mockResolvedValue([]);
+    apiMocks.fetchClaudeUsage.mockRejectedValue(new Error("claude_credentials_missing"));
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().claudeUsageError).toBe("Login required");
+    });
+  });
+
+  it("marks OpenAI usage as login required on unauthorized responses", async () => {
     apiMocks.readLocalLogs.mockResolvedValue([]);
     apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockRejectedValue(new Error("codex_usage_failed:401 Unauthorized"));
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().codexUsageError).toBe("Login required");
+    });
+  });
+
+  it("keeps polling local and provider usage when no dashboard cookie is present", async () => {
+    vi.useFakeTimers();
+    useStore.setState({ cookie: null });
+    apiMocks.readLocalLogs.mockResolvedValue([
+      {
+        ts: `${isoDate(0)}T10:00:00.000Z`,
+        request_id: "local-only-1",
+        developer_id: "dev-a",
+        repo: "tailor-bar",
+        model: "claude-sonnet-4",
+        input_tokens: 100,
+        output_tokens: 25,
+      },
+    ]);
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
     apiMocks.fetchCodexUsage.mockResolvedValue(null);
-    apiMocks.fetchMetrics.mockRejectedValue(new Error("unauthorized"));
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
     apiMocks.fetchUsage.mockResolvedValue({ data: [] });
     apiMocks.getProxyEnabled.mockResolvedValue(false);
 
     const { unmount } = renderHook(() => usePolling());
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1200);
+      await vi.advanceTimersByTimeAsync(0);
     });
 
-    expect(apiMocks.clearAuthCookie).toHaveBeenCalledTimes(1);
-    expect(useStore.getState().isAuthenticated).toBe(false);
-
-    expect(apiMocks.fetchMetrics).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchMetrics).not.toHaveBeenCalled();
+    expect(apiMocks.fetchUsage).not.toHaveBeenCalled();
+    expect(useStore.getState().todayLogs).toHaveLength(1);
     expect(useStore.getState().cookie).toBeNull();
     expect(useStore.getState().error).toBeNull();
 

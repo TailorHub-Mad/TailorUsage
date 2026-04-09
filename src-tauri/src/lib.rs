@@ -55,6 +55,23 @@ fn clear_persisted_cookie(app: &AppHandle) {
     fs::remove_file(path).ok();
 }
 
+fn auth_value_from_url(url: &url::Url) -> Option<String> {
+    const AUTH_KEYS: [&str; 4] = ["token", "cookie", "session", "sessionToken"];
+
+    if let Some(value) = url
+        .query_pairs()
+        .find(|(key, _)| AUTH_KEYS.contains(&key.as_ref()))
+        .map(|(_, value)| value.to_string())
+    {
+        return Some(value);
+    }
+
+    let fragment = url.fragment()?;
+    url::form_urlencoded::parse(fragment.trim_start_matches('?').as_bytes())
+        .find(|(key, _)| AUTH_KEYS.contains(&key.as_ref()))
+        .map(|(_, value)| value.to_string())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeOauthCredentials {
@@ -413,8 +430,9 @@ fn clear_auth_cookie(app: AppHandle, state: tauri::State<'_, AppState>) {
 
 #[tauri::command]
 async fn start_auth_flow(app: AppHandle) -> Result<(), String> {
-    // source=tailor tells the dashboard callback to redirect to tailorbar:// instead of the web root
-    let url = "https://ai-usage-dashboard-sage.vercel.app/api/auth/login?source=tailor";
+    // Use the hosted callback as the primary desktop auth path so the webview can
+    // intercept the final redirect directly in both dev and packaged builds.
+    let url = "https://ai-usage-dashboard-sage.vercel.app/api/auth/login";
 
     let app_handle = app.clone();
     let _auth_window =
@@ -424,31 +442,32 @@ async fn start_auth_flow(app: AppHandle) -> Result<(), String> {
             .center()
             .visible(true)
             .on_navigation(move |url: &url::Url| {
-                // After OAuth the dashboard redirects to /tailor-auth?token=<jwt>
-                // Intercept here in Rust before the page loads
+                // Accept both the legacy hosted callback and the desktop deep link callback.
                 let is_tailor_auth = url.host_str() == Some("ai-usage-dashboard-sage.vercel.app")
                     && url.path() == "/tailor-auth";
+                let is_tailor_scheme = url.scheme() == "tailorbar";
 
-                if is_tailor_auth {
-                    let token = url
-                        .query_pairs()
-                        .find(|(k, _)| k == "token")
-                        .map(|(_, v)| v.to_string());
+                if is_tailor_auth || is_tailor_scheme {
+                    let token = auth_value_from_url(url);
 
                     if let Some(token) = token {
                         persist_cookie(&app_handle, &token);
                         if let Some(state) = app_handle.try_state::<AppState>() {
-                            state.auth.lock().unwrap().cookie = Some(token);
+                            state.auth.lock().unwrap().cookie = Some(token.clone());
                         }
-                        app_handle.emit("auth-success", ()).ok();
+                        app_handle.emit("auth-success", token).ok();
+                    } else {
+                        app_handle.emit("auth-success", url.as_str().to_string()).ok();
                         // Close the auth window off the navigation callback to avoid deadlock
-                        let handle = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Some(w) = handle.get_webview_window("auth") {
-                                w.close().ok();
-                            }
-                        });
                     }
+
+                    // Close the auth window off the navigation callback to avoid deadlock
+                    let handle = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(w) = handle.get_webview_window("auth") {
+                            w.close().ok();
+                        }
+                    });
 
                     return false; // cancel navigation — /tailor-auth is not a real page
                 }
@@ -917,6 +936,14 @@ fn load_proxy_enabled_pref(app: &AppHandle) -> bool {
 
 // --- App Setup ---
 
+fn current_logical_height(window: &tauri::WebviewWindow) -> f64 {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    window
+        .inner_size()
+        .map(|s| s.height as f64 / scale)
+        .unwrap_or(600.0)
+}
+
 fn resize_and_center_main_window(window: &tauri::WebviewWindow) {
     if let Ok(Some(monitor)) = window.current_monitor() {
         let scale = monitor.scale_factor();
@@ -925,7 +952,7 @@ fn resize_and_center_main_window(window: &tauri::WebviewWindow) {
         let monitor_width = monitor.size().width as f64 / scale;
         let monitor_height = monitor.size().height as f64 / scale;
         let width = 450.0;
-        let height = 600.0;
+        let height = current_logical_height(window);
         window
             .set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))
             .ok();
@@ -942,7 +969,8 @@ fn resize_and_center_main_window(window: &tauri::WebviewWindow) {
 
 fn position_main_window_from_tray_icon(window: &tauri::WebviewWindow, icon_rect: tauri::Rect) {
     let width = 450.0;
-    let height = 600.0;
+    // Preserve the height set by the frontend's ResizeObserver; only reset width.
+    let height = current_logical_height(window);
     let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
 
     if let Ok(monitors) = window.available_monitors() {
@@ -1025,6 +1053,7 @@ fn resize_window(window: tauri::WebviewWindow, height: f64) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             migrate_proxy_dir();

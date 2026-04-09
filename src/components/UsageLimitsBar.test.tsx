@@ -1,7 +1,13 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UsageLimitsBar } from "./UsageLimitsBar";
 import { useStore } from "../store";
+
+const apiMocks = vi.hoisted(() => ({
+  openUrl: vi.fn(),
+}));
+
+vi.mock("../lib/api", () => apiMocks);
 
 function resetStore() {
   useStore.setState({
@@ -24,6 +30,8 @@ function resetStore() {
 describe("UsageLimitsBar", () => {
   beforeEach(() => {
     resetStore();
+    vi.clearAllMocks();
+    apiMocks.openUrl.mockResolvedValue(undefined);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-26T12:00:00.000Z"));
   });
@@ -165,5 +173,35 @@ describe("UsageLimitsBar", () => {
     expect(screen.getByText("Usage request failed (HTTP 429). Try again later.")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("9%")).toBeInTheDocument();
+  });
+
+  it("renders a Claude login CTA when Claude credentials are missing", () => {
+    useStore.setState({
+      claudeUsageError: "Login required",
+    });
+
+    render(<UsageLimitsBar />);
+
+    expect(screen.getByText("Log in to Claude")).toBeInTheDocument();
+    expect(screen.getByText("Connect your Claude session to view live limits.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(apiMocks.openUrl).toHaveBeenCalledWith("https://claude.ai/login");
+  });
+
+  it("renders an OpenAI login CTA when OpenAI credentials are missing", () => {
+    useStore.setState({
+      codexUsageError: "Login required",
+    });
+
+    render(<UsageLimitsBar />);
+
+    expect(screen.getByText("Log in to OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("Connect your OpenAI session to view live limits.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(apiMocks.openUrl).toHaveBeenCalledWith("https://chatgpt.com/auth/login");
   });
 });

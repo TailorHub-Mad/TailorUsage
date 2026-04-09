@@ -92,9 +92,9 @@ export function WeekSection() {
     <div className={`px-4 ${collapsed ? "pt-4 pb-0" : "py-4"}`}>
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="mb-3 flex w-full cursor-pointer items-center gap-1.5 text-left"
+        className={`flex h-8 w-full cursor-pointer items-center gap-1.5 text-left ${collapsed ? "" : "mb-3"}`}
       >
-        <span className="text-base font-bold text-gray-900">This Week</span>
+        <span className="text-base font-bold text-gray-900">Metrics</span>
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
