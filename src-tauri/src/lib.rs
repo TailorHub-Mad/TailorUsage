@@ -814,6 +814,19 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+fn parse_version(v: &str) -> (u64, u64, u64) {
+    let parts: Vec<u64> = v.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+    (
+        parts.first().copied().unwrap_or(0),
+        parts.get(1).copied().unwrap_or(0),
+        parts.get(2).copied().unwrap_or(0),
+    )
+}
+
+fn is_newer(latest: &str, current: &str) -> bool {
+    parse_version(latest) > parse_version(current)
+}
+
 #[tauri::command]
 async fn check_for_update() -> Result<UpdateInfo, String> {
     let client = reqwest::Client::builder()
@@ -852,7 +865,7 @@ async fn check_for_update() -> Result<UpdateInfo, String> {
         .to_string();
 
     let current = env!("CARGO_PKG_VERSION");
-    let available = !latest_version.is_empty() && latest_version != current;
+    let available = !latest_version.is_empty() && is_newer(&latest_version, current);
 
     Ok(UpdateInfo {
         available,
