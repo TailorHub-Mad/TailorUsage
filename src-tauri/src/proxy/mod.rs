@@ -80,6 +80,10 @@ pub fn start(config: ProxyConfig) -> Result<ProxyHandle, String> {
     if let Err(e) = config_writer::enable_claude_config(config.anthropic_port) {
         log::warn!("Failed to update claude config: {}", e);
     }
+    if let Err(e) = config_writer::enable_opencode_config(config.anthropic_port, config.openai_port)
+    {
+        log::warn!("Failed to update opencode config: {}", e);
+    }
 
     Ok(ProxyHandle {
         shutdown_tx,
@@ -94,5 +98,8 @@ pub fn cleanup_config() {
     }
     if let Err(e) = config_writer::disable_claude_config() {
         log::warn!("Failed to clean claude config: {}", e);
+    }
+    if let Err(e) = config_writer::disable_opencode_config() {
+        log::warn!("Failed to clean opencode config: {}", e);
     }
 }

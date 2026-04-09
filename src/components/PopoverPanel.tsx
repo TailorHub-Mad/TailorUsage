@@ -4,7 +4,6 @@ import { UsageLimitsBar } from "./UsageLimitsBar";
 import { ProxySwitch, ProxyToggle, useProxyToggleControl } from "./sections/ProxyToggle";
 import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
-import { keepWindowVisible } from "../lib/api";
 import tailorLogo from "../../src-tauri/icons/new-icon.png";
 
 export function PopoverPanel() {
@@ -33,8 +32,11 @@ export function PopoverPanel() {
           </div>
         )}
 
-        <div data-tauri-drag-region onMouseDown={() => keepWindowVisible()} className="px-4 pt-3 pb-2 flex items-center justify-between gap-3 cursor-move">
-          <img src={tailorLogo} alt="Tailor" className="h-7 w-7 rounded-md object-contain" />
+        <div className="px-4 pt-3 pb-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <img src={tailorLogo} alt="Tailor" className="h-7 w-7 rounded-md object-contain" />
+            <span className="text-sm font-semibold text-gray-900 tracking-tight">TailorUsage</span>
+          </div>
           <div className="flex items-center gap-2">
             <div
               className={`h-2 w-2 rounded-full ${

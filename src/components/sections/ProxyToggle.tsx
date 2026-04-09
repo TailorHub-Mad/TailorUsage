@@ -16,7 +16,7 @@ export function ProxySwitch({ enabled, loading = false, onToggle }: ProxySwitchP
       aria-label={enabled ? "Disable proxy" : "Enable proxy"}
       className={`relative h-5 w-9 rounded-full transition-colors ${
         enabled ? "bg-green-400" : "bg-red-300"
-      } ${loading ? "opacity-50" : ""}`}
+      } ${loading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
     >
       <div
         className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
@@ -76,11 +76,9 @@ export function ProxyToggle({ error = null }: ProxyToggleProps) {
       )}
 
       {/* Hint */}
-      {proxyStatus.enabled && (
-        <p className="text-xs text-gray-300">
-          Open a new terminal for proxy to take effect.
-        </p>
-      )}
+      <p className="text-xs text-gray-300">
+        Open a new terminal for {proxyStatus.enabled ? "proxy" : "this change"} to take effect.
+      </p>
 
       {/* Error */}
       {error && (

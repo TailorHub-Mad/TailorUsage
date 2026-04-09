@@ -1,5 +1,22 @@
 use crate::proxy::types::StreamAccumulator;
 
+fn sanitize_usage(value: Option<&serde_json::Value>) -> serde_json::Value {
+    let Some(value) = value else {
+        return serde_json::Value::Null;
+    };
+
+    serde_json::json!({
+        "input_tokens": value.get("input_tokens").and_then(|v| v.as_u64()),
+        "output_tokens": value.get("output_tokens").and_then(|v| v.as_u64()),
+        "cache_creation_input_tokens": value
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64()),
+        "cache_read_input_tokens": value
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64()),
+    })
+}
+
 fn meaningful_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -143,9 +160,70 @@ pub fn parse_openai_chunk(data: &str, acc: &mut StreamAccumulator) {
     }
 }
 
+pub fn summarize_anthropic_sse(buf: &str) -> serde_json::Value {
+    let mut events = Vec::new();
+    let mut current_event = String::new();
+    let mut current_data = String::new();
+
+    let flush = |events: &mut Vec<serde_json::Value>, event_type: &str, data: &str| {
+        if data.is_empty() {
+            return;
+        }
+
+        let summary = match serde_json::from_str::<serde_json::Value>(data) {
+            Ok(value) => serde_json::json!({
+                "event": event_type,
+                "top_level_keys": value
+                    .as_object()
+                    .map(|object| object.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default(),
+                "message_usage": sanitize_usage(value.get("message").and_then(|message| message.get("usage"))),
+                "usage": sanitize_usage(value.get("usage")),
+                "delta_stop_reason": value
+                    .get("delta")
+                    .and_then(|delta| delta.get("stop_reason"))
+                    .and_then(|stop_reason| stop_reason.as_str()),
+                "message_model": value
+                    .get("message")
+                    .and_then(|message| message.get("model"))
+                    .and_then(|model| model.as_str()),
+                "type": value.get("type").and_then(|kind| kind.as_str()),
+            }),
+            Err(_) => serde_json::json!({
+                "event": event_type,
+                "invalid_json": true,
+                "raw_preview": data.chars().take(240).collect::<String>(),
+            }),
+        };
+
+        events.push(summary);
+    };
+
+    for line in buf.lines() {
+        if line.starts_with("event: ") {
+            current_event = line[7..].trim().to_string();
+        } else if line.starts_with("data: ") {
+            current_data = line[6..].to_string();
+        } else if line.is_empty() {
+            flush(&mut events, &current_event, &current_data);
+            current_event.clear();
+            current_data.clear();
+        }
+    }
+
+    if !current_data.is_empty() {
+        flush(&mut events, &current_event, &current_data);
+    }
+
+    serde_json::json!({
+        "event_count": events.len(),
+        "events": events,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{extract_openai_model, parse_openai_chunk};
+    use super::{extract_openai_model, parse_openai_chunk, summarize_anthropic_sse};
     use crate::proxy::types::StreamAccumulator;
 
     #[test]
@@ -174,6 +252,23 @@ mod tests {
         assert_eq!(acc.model.as_deref(), Some("gpt-5.4"));
         assert_eq!(acc.input_tokens, Some(120));
         assert_eq!(acc.output_tokens, Some(30));
+    }
+
+    #[test]
+    fn summarizes_anthropic_usage_events_without_content() {
+        let summary = summarize_anthropic_sse(
+            concat!(
+                "event: message_start\n",
+                "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":12,\"cache_creation_input_tokens\":3}}}\n\n",
+                "event: message_delta\n",
+                "data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":34},\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"
+            ),
+        );
+
+        assert_eq!(summary["event_count"], 2);
+        assert_eq!(summary["events"][0]["message_usage"]["input_tokens"], 12);
+        assert_eq!(summary["events"][1]["usage"]["output_tokens"], 34);
+        assert_eq!(summary["events"][1]["delta_stop_reason"], "end_turn");
     }
 }
 

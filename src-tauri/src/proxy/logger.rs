@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 fn logs_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
-    let dir = PathBuf::from(home).join(".anthropic-proxy").join("logs");
+    let dir = PathBuf::from(home).join(".tailor-usage-proxy").join("logs");
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -14,9 +14,18 @@ fn credentials_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(
         PathBuf::from(home)
-            .join(".anthropic-proxy")
+            .join(".tailor-usage-proxy")
             .join("credentials.json"),
     )
+}
+
+fn diagnostics_dir() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let dir = PathBuf::from(home)
+        .join(".tailor-usage-proxy")
+        .join("diagnostics");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 fn read_json_file(path: PathBuf) -> Option<serde_json::Value> {
@@ -58,6 +67,17 @@ pub fn append_log(entry: &LogEntry) {
     };
 
     writeln!(file, "{}", line).ok();
+}
+
+pub fn write_anthropic_token_diagnostics(diagnostics: &serde_json::Value) {
+    let Some(dir) = diagnostics_dir() else { return };
+    let path = dir.join("anthropic-token-debug.json");
+
+    let Ok(payload) = serde_json::to_string_pretty(diagnostics) else {
+        return;
+    };
+
+    fs::write(path, payload).ok();
 }
 
 /// Get developer_id from git config (user.email).

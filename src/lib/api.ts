@@ -87,6 +87,10 @@ export async function openUrl(url: string): Promise<void> {
   return invoke("open_url", { url });
 }
 
+export async function openLogsFolder(): Promise<void> {
+  return invoke("open_logs_folder");
+}
+
 export async function keepWindowVisible(): Promise<void> {
   return invoke("keep_window_visible");
 }

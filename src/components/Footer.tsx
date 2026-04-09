@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useStore } from "../store";
-import { clearAuthCookie, setPreferences as savePreferences, openUrl } from "../lib/api";
+import {
+  clearAuthCookie,
+  setPreferences as savePreferences,
+  openLogsFolder,
+  openUrl,
+} from "../lib/api";
 import type { Preferences } from "../lib/types";
 
 const POLL_OPTIONS = [
@@ -35,6 +40,10 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
     if (updateInfo?.download_url) {
       openUrl(updateInfo.download_url).catch(() => {});
     }
+  };
+
+  const handleOpenLogs = () => {
+    openLogsFolder().catch(() => {});
   };
 
   return (
@@ -96,6 +105,12 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
             <path d="M3 22v-6h6" />
             <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
           </svg>
+        </button>
+        <button
+          onClick={handleOpenLogs}
+          className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Open Logs
         </button>
         <button
           onClick={handleSignOut}

@@ -80,9 +80,7 @@ function inferProvider(endpoint: string, model: string): LogRecord["provider"] {
     endpointValue.includes("/completions") ||
     endpointValue.includes("/models") ||
     modelValue.includes("gpt") ||
-    modelValue.includes("o1") ||
-    modelValue.includes("o3") ||
-    modelValue.includes("o4")
+    /^o\d/.test(modelValue)
   ) {
     return "openai";
   }

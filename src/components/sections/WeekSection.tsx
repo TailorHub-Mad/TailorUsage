@@ -1,6 +1,4 @@
 import { useStore } from "../../store";
-import { formatCost } from "../../lib/format";
-import { calculateCost } from "../../lib/cost";
 import { logTime } from "../../lib/logs";
 import type { TooltipProps } from "recharts";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -57,10 +55,15 @@ function WeekTooltip({ active, payload, label }: TooltipProps<number, string>) {
   );
 }
 
+function rankUsage(entries: Record<string, number>) {
+  return Object.entries(entries).sort(
+    ([nameA, countA], [nameB, countB]) => countB - countA || nameA.localeCompare(nameB),
+  );
+}
+
 export function WeekSection() {
   const { weekLogs } = useStore();
 
-  const cost = calculateCost(weekLogs);
   const weekActivity = buildWeekActivity(weekLogs);
   const totalCalls = weekLogs.length;
   const activeDays = weekActivity.filter((day) => day.calls > 0).length;
@@ -70,18 +73,22 @@ export function WeekSection() {
     const repo = log.repo?.trim() || "unknown";
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
   }
-  const rankedRepos = Object.entries(repoCounts).sort(([, a], [, b]) => b - a);
-  const topRepo = rankedRepos.find(([repo]) => repo !== "unknown") ?? rankedRepos[0];
-  const topRepoPct =
-    topRepo && weekLogs.length > 0
-      ? Math.round((topRepo[1] / weekLogs.length) * 100)
-      : 0;
+  const rankedRepos = rankUsage(repoCounts);
+  const knownRankedRepos = rankedRepos.filter(([repo]) => repo !== "unknown");
+  const topRepos = (knownRankedRepos.length > 0 ? knownRankedRepos : rankedRepos).slice(0, 3);
+
+  const modelCounts: Record<string, number> = {};
+  for (const log of weekLogs) {
+    const model = log.model?.trim();
+    if (!model || model === "unknown") continue;
+    modelCounts[model] = (modelCounts[model] || 0) + 1;
+  }
+  const topModels = rankUsage(modelCounts).slice(0, 3);
 
   return (
     <div className="px-4 py-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="mb-3">
         <span className="text-base font-bold text-gray-900">This Week</span>
-        <span className="text-sm font-semibold text-gray-700">{formatCost(cost)}</span>
       </div>
 
       {totalCalls > 0 ? (
@@ -123,11 +130,41 @@ export function WeekSection() {
         <p className="text-xs text-gray-300 text-center py-2">No activity this week</p>
       )}
 
-      {topRepo && (
+      {topRepos.length > 0 && (
         <div className="mt-2 text-xs text-gray-400">
-          Top repo:{" "}
-          <span className="text-gray-600 font-medium">{topRepo[0]}</span>{" "}
-          <span className="text-gray-400">({topRepoPct}%)</span>
+          <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top 3 repos</div>
+          <div className="mt-1 space-y-1">
+            {topRepos.map(([repo, count], index) => (
+              <div key={repo} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-gray-600">
+                  <span className="mr-1 text-gray-400">{index + 1}.</span>
+                  <span className="font-medium">{repo}</span>
+                </span>
+                <span className="shrink-0 text-gray-400">
+                  {count} {count === 1 ? "contribution" : "contributions"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {topModels.length > 0 && (
+        <div className="mt-3 text-xs text-gray-400">
+          <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top 3 models</div>
+          <div className="mt-1 space-y-1">
+            {topModels.map(([model, count], index) => (
+              <div key={model} className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 break-all text-gray-600">
+                  <span className="mr-1 text-gray-400">{index + 1}.</span>
+                  <span className="font-medium">{model}</span>
+                </span>
+                <span className="shrink-0 text-gray-400">
+                  {count} {count === 1 ? "call" : "calls"}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

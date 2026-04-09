@@ -163,3 +163,109 @@ pub fn disable_claude_config() -> Result<(), String> {
 
     Ok(())
 }
+
+fn set_provider_base_url(
+    provider: &mut serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    url: &str,
+) {
+    let entry = provider
+        .entry(name.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(p) = entry.as_object_mut() {
+        let options = p
+            .entry("options".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(opts) = options.as_object_mut() {
+            opts.insert(
+                "baseURL".to_string(),
+                serde_json::Value::String(url.to_string()),
+            );
+        }
+    }
+}
+
+fn remove_provider_base_url(provider: &mut serde_json::Map<String, serde_json::Value>, name: &str) {
+    let Some(entry) = provider.get_mut(name).and_then(|e| e.as_object_mut()) else {
+        return;
+    };
+    if let Some(options) = entry.get_mut("options").and_then(|o| o.as_object_mut()) {
+        options.remove("baseURL");
+    }
+    let options_empty = entry
+        .get("options")
+        .and_then(|o| o.as_object())
+        .map(|o| o.is_empty())
+        .unwrap_or(false);
+    if options_empty {
+        entry.remove("options");
+    }
+}
+
+/// Set provider baseURLs in ~/.config/opencode/opencode.json for OpenCode.
+///
+/// OpenCode uses the Vercel AI SDK whose Anthropic adapter expects baseURL to
+/// include /v1 (e.g. https://api.anthropic.com/v1), unlike the raw Anthropic SDK
+/// which appends /v1 itself.
+pub fn enable_opencode_config(anthropic_port: u16, openai_port: u16) -> Result<(), String> {
+    let home = home_dir().ok_or("Cannot determine home directory")?;
+    let config_dir = home.join(".config").join("opencode");
+    let config_path = config_dir.join("opencode.json");
+
+    let mut config: serde_json::Value = if config_path.exists() {
+        let data = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&data).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = config
+        .as_object_mut()
+        .ok_or("Invalid opencode.json format")?;
+    let provider = obj
+        .entry("provider".to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("Invalid provider field in opencode.json")?;
+
+    set_provider_base_url(
+        provider,
+        "anthropic",
+        &format!("http://127.0.0.1:{}/v1", anthropic_port),
+    );
+    set_provider_base_url(
+        provider,
+        "openai",
+        &format!("http://127.0.0.1:{}/v1", openai_port),
+    );
+
+    fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    let pretty = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    fs::write(&config_path, pretty).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Remove proxy baseURLs from ~/.config/opencode/opencode.json.
+pub fn disable_opencode_config() -> Result<(), String> {
+    let home = home_dir().ok_or("Cannot determine home directory")?;
+    let config_path = home.join(".config").join("opencode").join("opencode.json");
+
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let data = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+    let mut config: serde_json::Value =
+        serde_json::from_str(&data).unwrap_or(serde_json::json!({}));
+
+    if let Some(provider) = config.get_mut("provider").and_then(|p| p.as_object_mut()) {
+        remove_provider_base_url(provider, "anthropic");
+        remove_provider_base_url(provider, "openai");
+    }
+
+    let pretty = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    fs::write(&config_path, pretty).map_err(|e| e.to_string())?;
+
+    Ok(())
+}

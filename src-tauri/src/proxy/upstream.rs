@@ -8,6 +8,80 @@ use crate::proxy::logger;
 use crate::proxy::sse_parser;
 use crate::proxy::types::{LogEntry, Provider, StreamAccumulator};
 
+fn sanitize_anthropic_response_summary(value: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "top_level_keys": value
+            .as_object()
+            .map(|object| object.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default(),
+        "type": value.get("type").and_then(|kind| kind.as_str()),
+        "model": value.get("model").and_then(|model| model.as_str()),
+        "usage": value.get("usage").map(|usage| serde_json::json!({
+            "input_tokens": usage.get("input_tokens").and_then(|v| v.as_u64()),
+            "output_tokens": usage.get("output_tokens").and_then(|v| v.as_u64()),
+            "cache_creation_input_tokens": usage
+                .get("cache_creation_input_tokens")
+                .and_then(|v| v.as_u64()),
+            "cache_read_input_tokens": usage
+                .get("cache_read_input_tokens")
+                .and_then(|v| v.as_u64()),
+        })),
+        "stop_reason": value.get("stop_reason").and_then(|stop_reason| stop_reason.as_str()),
+    })
+}
+
+fn maybe_write_anthropic_token_diagnostics(
+    provider: Provider,
+    endpoint: &str,
+    status: u16,
+    is_stream: bool,
+    req_model: &str,
+    acc: &StreamAccumulator,
+    resp_bytes: &Bytes,
+) {
+    if provider != Provider::Anthropic || status >= 300 {
+        return;
+    }
+
+    let input_tokens = acc.input_tokens.unwrap_or(0);
+    let output_tokens = acc.output_tokens.unwrap_or(0);
+    if input_tokens > 0 || output_tokens > 0 {
+        return;
+    }
+
+    let payload = if is_stream {
+        let text = String::from_utf8_lossy(resp_bytes);
+        serde_json::json!({
+            "response_kind": "anthropic_sse",
+            "sse_summary": sse_parser::summarize_anthropic_sse(&text),
+        })
+    } else if let Ok(value) = serde_json::from_slice::<serde_json::Value>(resp_bytes) {
+        serde_json::json!({
+            "response_kind": "anthropic_json",
+            "response_summary": sanitize_anthropic_response_summary(&value),
+        })
+    } else {
+        serde_json::json!({
+            "response_kind": "anthropic_non_json",
+            "raw_preview": String::from_utf8_lossy(resp_bytes)
+                .chars()
+                .take(240)
+                .collect::<String>(),
+        })
+    };
+
+    logger::write_anthropic_token_diagnostics(&serde_json::json!({
+        "captured_at": chrono::Utc::now().to_rfc3339(),
+        "endpoint": endpoint,
+        "request_model": req_model,
+        "stream": is_stream,
+        "status": status,
+        "logged_input_tokens": input_tokens,
+        "logged_output_tokens": output_tokens,
+        "payload": payload,
+    }));
+}
+
 fn meaningful_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -18,6 +92,29 @@ fn meaningful_string(value: Option<&str>) -> Option<String> {
                 && !value.eq_ignore_ascii_case("undefined")
         })
         .map(str::to_string)
+}
+
+fn anthropic_oauth_bearer_from_x_api_key(
+    provider: Provider,
+    headers: &hyper::HeaderMap,
+) -> Option<String> {
+    if provider != Provider::Anthropic {
+        return None;
+    }
+
+    let token = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)?;
+
+    // OpenCode sends Anthropic OAuth access tokens through the apiKey field when a
+    // custom base URL is configured. Anthropic expects those tokens as bearer auth,
+    // not as x-api-key headers.
+    if token.starts_with("sk-ant-oat") {
+        Some(token.to_string())
+    } else {
+        None
+    }
 }
 
 fn string_at_path(value: &serde_json::Value, path: &[&str]) -> Option<String> {
@@ -158,10 +255,27 @@ pub async fn forward(
         if name.as_str().eq_ignore_ascii_case("host") {
             continue;
         }
+        // Skip Accept-Encoding — reqwest does not have compression features enabled,
+        // so forwarding this header causes Anthropic/OpenAI to respond with compressed
+        // bytes that we cannot decompress. The raw bytes are then unparseable by the
+        // SSE token extractor, resulting in all token counts being logged as 0.
+        // Without this header the upstream responds with plain-text SSE that we can parse.
+        if name.as_str().eq_ignore_ascii_case("accept-encoding") {
+            continue;
+        }
         if let Ok(n) = reqwest::header::HeaderName::from_bytes(name.as_str().as_bytes()) {
             if let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
                 upstream_headers.insert(n, v);
             }
+        }
+    }
+
+    if let Some(token) = anthropic_oauth_bearer_from_x_api_key(provider, req.headers()) {
+        upstream_headers.remove("x-api-key");
+
+        let auth_value = format!("Bearer {}", token);
+        if let Ok(value) = HeaderValue::from_str(&auth_value) {
+            upstream_headers.insert(AUTHORIZATION, value);
         }
     }
 
@@ -296,8 +410,21 @@ pub async fn forward(
         }
     }
 
+    maybe_write_anthropic_token_diagnostics(
+        provider,
+        &raw_uri_path,
+        status,
+        is_stream,
+        &req_model,
+        &acc,
+        &resp_bytes,
+    );
+
     // Log the request
-    let model = acc.model.filter(|value| !value.is_empty()).unwrap_or(req_model);
+    let model = acc
+        .model
+        .filter(|value| !value.is_empty())
+        .unwrap_or(req_model);
     let entry = LogEntry {
         ts: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -345,12 +472,17 @@ pub async fn forward(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_openai_model, meaningful_string};
+    use super::{anthropic_oauth_bearer_from_x_api_key, extract_openai_model, meaningful_string};
+    use crate::proxy::types::Provider;
+    use hyper::HeaderMap;
 
     #[test]
     fn ignores_placeholder_model_values() {
         assert_eq!(meaningful_string(Some("unknown")), None);
-        assert_eq!(meaningful_string(Some(" gpt-5.4 ")), Some("gpt-5.4".to_string()));
+        assert_eq!(
+            meaningful_string(Some(" gpt-5.4 ")),
+            Some("gpt-5.4".to_string())
+        );
     }
 
     #[test]
@@ -365,6 +497,21 @@ mod tests {
         });
 
         assert_eq!(extract_openai_model(&payload), Some("gpt-5.4".to_string()));
+    }
+
+    #[test]
+    fn rewrites_anthropic_oauth_tokens_from_x_api_key() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", "sk-ant-oat01-example".parse().unwrap());
+
+        assert_eq!(
+            anthropic_oauth_bearer_from_x_api_key(Provider::Anthropic, &headers),
+            Some("sk-ant-oat01-example".to_string())
+        );
+        assert_eq!(
+            anthropic_oauth_bearer_from_x_api_key(Provider::Openai, &headers),
+            None
+        );
     }
 }
 

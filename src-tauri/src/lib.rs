@@ -585,11 +585,22 @@ async fn fetch_codex_usage() -> Result<serde_json::Value, String> {
         .map_err(|e| e.to_string())
 }
 
+// --- One-time migration: ~/.anthropic-proxy → ~/.tailor-usage-proxy ---
+
+fn migrate_proxy_dir() {
+    let Some(home) = dirs_next() else { return };
+    let old_dir = home.join(".anthropic-proxy");
+    let new_dir = home.join(".tailor-usage-proxy");
+    if old_dir.exists() && !new_dir.exists() {
+        fs::rename(&old_dir, &new_dir).ok();
+    }
+}
+
 // --- Dashboard log forwarding ---
 
 fn last_forwarded_path() -> Option<PathBuf> {
     let home = dirs_next()?;
-    Some(home.join(".anthropic-proxy").join("last_forwarded.json"))
+    Some(home.join(".tailor-usage-proxy").join("last_forwarded.json"))
 }
 
 fn read_last_forwarded_ts() -> u64 {
@@ -610,8 +621,7 @@ fn write_last_forwarded_ts(ts: u64) {
     fs::write(path, serde_json::json!({ "ts": ts }).to_string()).ok();
 }
 
-const DASHBOARD_INGEST_URL: &str =
-    "https://ai-usage-dashboard-sage.vercel.app/api/ingest";
+const DASHBOARD_INGEST_URL: &str = "https://ai-usage-dashboard-sage.vercel.app/api/ingest";
 
 #[tauri::command]
 async fn forward_logs_to_dashboard() -> Result<usize, String> {
@@ -620,7 +630,7 @@ async fn forward_logs_to_dashboard() -> Result<usize, String> {
     let Some(home) = dirs_next() else {
         return Ok(0);
     };
-    let logs_dir = home.join(".anthropic-proxy").join("logs");
+    let logs_dir = home.join(".tailor-usage-proxy").join("logs");
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let yesterday = (chrono::Utc::now() - chrono::Duration::days(1))
@@ -684,7 +694,7 @@ fn read_local_logs(date: String) -> Vec<serde_json::Value> {
         return vec![];
     };
     let path = home
-        .join(".anthropic-proxy")
+        .join(".tailor-usage-proxy")
         .join("logs")
         .join(format!("{}.jsonl", date));
     let Ok(content) = fs::read_to_string(&path) else {
@@ -695,6 +705,20 @@ fn read_local_logs(date: String) -> Vec<serde_json::Value> {
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
+}
+
+#[tauri::command]
+fn open_logs_folder() -> Result<(), String> {
+    let home = dirs_next().ok_or_else(|| "HOME not set".to_string())?;
+    let logs_dir = home.join(".tailor-usage-proxy").join("logs");
+
+    fs::create_dir_all(&logs_dir).map_err(|e| e.to_string())?;
+
+    Command::new("open")
+        .arg(&logs_dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -997,6 +1021,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            migrate_proxy_dir();
+
             // Load persisted cookie
             if let Some(cookie) = load_persisted_cookie(app.handle()) {
                 // Will be stored in AppState after tray is built below
@@ -1104,6 +1130,7 @@ pub fn run() {
             fetch_claude_usage,
             fetch_codex_usage,
             read_local_logs,
+            open_logs_folder,
             set_tray_title,
             check_proxy_running,
             get_preferences,
@@ -1134,6 +1161,8 @@ pub fn run() {
                             let _ = h;
                         }
                     }
+                    // Always clean up config on exit so Claude Code works without the app running
+                    proxy::cleanup_config();
                 }
                 _ => {}
             }
