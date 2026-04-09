@@ -73,8 +73,6 @@ export function useProxyToggleControl() {
 }
 
 export function ProxyToggle({ error = null }: ProxyToggleProps) {
-  const { proxyStatus } = useStore();
-
   return (
     <div className="px-4 py-3 space-y-2">
       {/* Error */}
