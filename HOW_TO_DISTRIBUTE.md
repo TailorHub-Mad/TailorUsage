@@ -11,11 +11,35 @@ Send your team this message:
 ```sh
 brew tap TailorHub-Mad/tailorusage
 brew install --cask tailorusage
+xattr -dr com.apple.quarantine /Applications/TailorUsage.app
 ```
 
 That's it. The app will appear in your Applications folder and can be launched from there.
 
+For updating: 
+```sh
+brew update && brew update tailorusage
+```
+
 ---
+What these commands do
+
+```sh
+brew tap TailorHub-Mad/tailorusage
+```
+- Adds TailorHub-Mad/tailorusage as a Homebrew tap.
+- A tap is a custom package repository, so Homebrew can discover formulas or casks published there.
+
+```sh
+brew install --cask tailorusage
+```
+- Installs the tailorusage macOS app from that tap as a cask.
+- --cask is used for downloadable macOS applications, not CLI tools.
+
+```sh
+xattr -dr com.apple.quarantine /Applications/TailorUsage.app
+```
+- Bypasses the macOS Quarantine for being a self-signed app without a paid code-sign certificate.
 
 ## Getting future updates
 

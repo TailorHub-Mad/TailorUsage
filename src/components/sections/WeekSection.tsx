@@ -86,7 +86,7 @@ export function WeekSection() {
   }
   const topModels = rankUsage(modelCounts).slice(0, 3);
 
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   return (
     <div className={`px-4 ${collapsed ? "pt-4 pb-0" : "py-4"}`}>

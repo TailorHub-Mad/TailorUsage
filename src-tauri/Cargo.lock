@@ -3907,7 +3907,7 @@ dependencies = [
 
 [[package]]
 name = "tailor-usage"
-version = "0.4.2"
+version = "0.5.1"
 dependencies = [
  "bytes",
  "chrono",
