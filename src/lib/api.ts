@@ -98,3 +98,7 @@ export async function keepWindowVisible(): Promise<void> {
 export async function forwardLogsToDashboard(): Promise<number> {
   return invoke("forward_logs_to_dashboard");
 }
+
+export async function resizeWindow(height: number): Promise<void> {
+  return invoke("resize_window", { height });
+}

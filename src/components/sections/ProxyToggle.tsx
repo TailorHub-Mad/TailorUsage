@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useStore } from "../../store";
 import { startProxy, stopProxy } from "../../lib/api";
 
@@ -35,6 +35,14 @@ export function useProxyToggleControl() {
   const { proxyStatus, setProxyStatus } = useStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showMessage, setShowMessage] = useState(false);
+
+  useEffect(() => {
+    if (showMessage) {
+      const timer = setTimeout(() => setShowMessage(false), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [showMessage]);
 
   const handleProxyToggle = async () => {
     setLoading(true);
@@ -47,10 +55,12 @@ export function useProxyToggleControl() {
         await startProxy();
         setProxyStatus({ ...proxyStatus, enabled: true, running: true });
       }
+      setShowMessage(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.toLowerCase().includes("already running")) {
         setProxyStatus({ ...proxyStatus, enabled: true, running: true });
+        setShowMessage(true);
       } else {
         setError(msg);
       }
@@ -59,7 +69,7 @@ export function useProxyToggleControl() {
     }
   };
 
-  return { loading, error, handleProxyToggle };
+  return { loading, error, showMessage, handleProxyToggle };
 }
 
 export function ProxyToggle({ error = null }: ProxyToggleProps) {
@@ -67,23 +77,37 @@ export function ProxyToggle({ error = null }: ProxyToggleProps) {
 
   return (
     <div className="px-4 py-3 space-y-2">
-      {/* Port status indicators */}
-      {proxyStatus.enabled && (
-        <div className="flex gap-3 text-xs text-gray-400">
-          <span>Anthropic :8787</span>
-          <span>OpenAI :8788</span>
-        </div>
-      )}
-
-      {/* Hint */}
-      <p className="text-xs text-gray-300">
-        Open a new terminal for {proxyStatus.enabled ? "proxy" : "this change"} to take effect.
-      </p>
-
       {/* Error */}
       {error && (
         <p className="text-xs text-red-400">{error}</p>
       )}
     </div>
+  );
+}
+
+export function ProxyMessage({ show }: { show: boolean }) {
+  const { proxyStatus } = useStore();
+  const [isVisible, setIsVisible] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    if (show) {
+      setIsMounted(true);
+      setIsVisible(true);
+    } else {
+      setIsVisible(false);
+      const timer = setTimeout(() => setIsMounted(false), 400);
+      return () => clearTimeout(timer);
+    }
+  }, [show]);
+
+  if (!isMounted) return null;
+
+  return (
+    <p className={`text-xs text-gray-400 text-right transition-opacity duration-400 ${
+      isVisible ? 'opacity-100' : 'opacity-0'
+    }`}>
+      Open a new terminal for {proxyStatus.enabled ? "proxy" : "this change"} to take effect.
+    </p>
   );
 }

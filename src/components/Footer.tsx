@@ -3,8 +3,6 @@ import { useStore } from "../store";
 import {
   clearAuthCookie,
   setPreferences as savePreferences,
-  openLogsFolder,
-  openUrl,
 } from "../lib/api";
 import type { Preferences } from "../lib/types";
 
@@ -16,7 +14,7 @@ const POLL_OPTIONS = [
 ];
 
 export function Footer({ onRefresh }: { onRefresh?: () => void }) {
-  const { preferences, setPreferences, signOut, updateInfo, appVersion } = useStore();
+  const { preferences, setPreferences, signOut, appVersion } = useStore();
   const [spinning, setSpinning] = useState(false);
 
   const updatePrefs = async (update: Partial<Preferences>) => {
@@ -34,16 +32,6 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
     setSpinning(true);
     await onRefresh?.();
     setTimeout(() => setSpinning(false), 600);
-  };
-
-  const handleUpdate = () => {
-    if (updateInfo?.download_url) {
-      openUrl(updateInfo.download_url).catch(() => {});
-    }
-  };
-
-  const handleOpenLogs = () => {
-    openLogsFolder().catch(() => {});
   };
 
   return (
@@ -66,18 +54,7 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
 
       <div className="flex items-center gap-2">
         {appVersion && (
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-400">v{appVersion}</span>
-            {updateInfo?.available && (
-              <button
-                onClick={handleUpdate}
-                title={`Update to v${updateInfo.latest_version}`}
-                className="text-xs font-medium text-amber-600 hover:text-amber-700 transition-colors"
-              >
-                ↑ v{updateInfo.latest_version}
-              </button>
-            )}
-          </div>
+          <span className="text-xs text-gray-400">v{appVersion}</span>
         )}
         <button
           onClick={handleRefresh}
@@ -105,12 +82,6 @@ export function Footer({ onRefresh }: { onRefresh?: () => void }) {
             <path d="M3 22v-6h6" />
             <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
           </svg>
-        </button>
-        <button
-          onClick={handleOpenLogs}
-          className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          Open Logs
         </button>
         <button
           onClick={handleSignOut}

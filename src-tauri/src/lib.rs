@@ -1016,6 +1016,12 @@ fn keep_window_visible(state: tauri::State<'_, AppState>) {
     *state.last_shown.lock().unwrap() = Some(Instant::now());
 }
 
+#[tauri::command]
+fn resize_window(window: tauri::WebviewWindow, height: f64) {
+    let clamped = height.clamp(200.0, 900.0);
+    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(450.0, clamped)));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1143,6 +1149,7 @@ pub fn run() {
             open_url,
             keep_window_visible,
             forward_logs_to_dashboard,
+            resize_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

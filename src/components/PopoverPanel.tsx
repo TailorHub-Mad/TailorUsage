@@ -1,21 +1,36 @@
+import { useRef, useEffect } from "react";
 import { useStore } from "../store";
 import { usePolling } from "../hooks/usePolling";
 import { UsageLimitsBar } from "./UsageLimitsBar";
-import { ProxySwitch, ProxyToggle, useProxyToggleControl } from "./sections/ProxyToggle";
+import { ProxySwitch, ProxyToggle, ProxyMessage, useProxyToggleControl } from "./sections/ProxyToggle";
 import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
+import { resizeWindow, openUrl } from "../lib/api";
 import tailorLogo from "../../src-tauri/icons/new-icon.png";
 
 export function PopoverPanel() {
   const { refresh } = usePolling();
-  const { loading, error, proxyStatus } = useStore();
-  const { loading: proxyLoading, error: proxyError, handleProxyToggle } = useProxyToggleControl();
+  const { loading, error, proxyStatus, updateInfo } = useStore();
+  const { loading: proxyLoading, error: proxyError, showMessage, handleProxyToggle } = useProxyToggleControl();
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[0].contentRect.height;
+      resizeWindow(height + 16).catch(() => {}); // 16px = 8px top + 8px bottom from outer p-2
+    });
+    observer.observe(card);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div className="h-full p-2 flex flex-col">
+    <div className="p-2">
       {/* Card with drop shadow */}
       <div
-        className="flex-1 bg-white rounded-2xl flex flex-col overflow-hidden"
+        ref={cardRef}
+        className="bg-white rounded-2xl flex flex-col overflow-hidden"
         style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10)" }}
       >
         {/* Loading bar */}
@@ -54,11 +69,33 @@ export function PopoverPanel() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        {/* Temporary message below toggle */}
+        <div className="px-4 h-2">
+          {showMessage && <ProxyMessage show={showMessage} />}
+        </div>
+
+        {/* Update banner */}
+        {updateInfo?.available && (
+          <button
+            onClick={() => openUrl(updateInfo.download_url).catch(() => {})}
+            className="mx-3 mt-2 flex cursor-pointer items-center justify-between gap-2 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700 transition-colors hover:bg-amber-100 border border-amber-200/70"
+          >
+            <div className="flex items-center gap-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              <span>v{updateInfo.latest_version} available</span>
+            </div>
+            <span className="font-medium">Download update →</span>
+          </button>
+        )}
+
+        <div>
           <UsageLimitsBar />
           <Divider />
           <WeekSection />
-          <Divider />
           <ProxyToggle error={proxyError} />
         </div>
 
