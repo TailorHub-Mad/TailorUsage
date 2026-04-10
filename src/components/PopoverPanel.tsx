@@ -1,10 +1,11 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { useStore } from "../store";
 import { usePolling } from "../hooks/usePolling";
 import { UsageLimitsBar } from "./UsageLimitsBar";
 import { ProxySwitch, ProxyToggle, ProxyMessage, useProxyToggleControl } from "./sections/ProxyToggle";
 import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
+import { SettingsPanel } from "./SettingsPanel";
 import { resizeWindow, openUrl } from "../lib/api";
 import tailorLogo from "../../src-tauri/icons/new-icon.png";
 
@@ -12,6 +13,7 @@ export function PopoverPanel() {
   const { refresh } = usePolling();
   const { loading, error, proxyStatus, updateInfo } = useStore();
   const { loading: proxyLoading, error: proxyError, showMessage, handleProxyToggle } = useProxyToggleControl();
+  const [showSettings, setShowSettings] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -92,15 +94,21 @@ export function PopoverPanel() {
           </button>
         )}
 
-        <div>
-          <UsageLimitsBar />
-          <Divider />
-          <WeekSection />
-          <ProxyToggle error={proxyError} />
-        </div>
+        {showSettings ? (
+          <div className="border-t border-gray-100">
+            <SettingsPanel onClose={() => setShowSettings(false)} />
+          </div>
+        ) : (
+          <div>
+            <UsageLimitsBar />
+            <Divider />
+            <WeekSection />
+            <ProxyToggle error={proxyError} />
+          </div>
+        )}
 
         <div className="border-t border-gray-100">
-          <Footer onRefresh={refresh} />
+          <Footer onRefresh={refresh} onSettings={() => setShowSettings((s) => !s)} />
         </div>
       </div>
     </div>

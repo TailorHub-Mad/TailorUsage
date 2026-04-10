@@ -77,6 +77,7 @@ export interface ProxyStatus {
 export interface Preferences {
   poll_interval: number;
   tray_display: "cost" | "tokens";
+  tray_source: "auto" | "claude" | "openai";
 }
 
 export interface UpdateInfo {

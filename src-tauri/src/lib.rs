@@ -789,7 +789,8 @@ fn get_preferences(app: AppHandle) -> serde_json::Value {
         .and_then(|d| serde_json::from_str(&d).ok())
         .unwrap_or(serde_json::json!({
             "poll_interval": 900000,
-            "tray_display": "tokens"
+            "tray_display": "tokens",
+            "tray_source": "auto"
         }))
 }
 

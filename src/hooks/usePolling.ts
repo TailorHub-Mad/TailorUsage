@@ -73,6 +73,7 @@ function formatTrayTitle(
   cost: number,
   logs: LogRecord[],
   trayDisplay: "cost" | "tokens",
+  traySource: "auto" | "claude" | "openai",
   claudeUsage: ClaudeUsage | null,
   codexUsage: CodexUsage | null,
 ): string {
@@ -80,22 +81,24 @@ function formatTrayTitle(
     return formatCost(cost);
   }
 
-  const activeProvider = latestProvider(logs);
-  if (activeProvider === "openai") {
-    const codexUtilization = codexUsage?.rate_limit?.primary_window?.used_percent;
-    if (typeof codexUtilization === "number") {
-      return `${Math.round(codexUtilization)}%`;
-    }
-  }
-
   const claudeUtilization = claudeUsage?.five_hour?.utilization;
-  if (typeof claudeUtilization === "number") {
-    return `${Math.round(claudeUtilization)}%`;
+  const codexUtilization = codexUsage?.rate_limit?.primary_window?.used_percent;
+
+  let prioritize: "anthropic" | "openai";
+  if (traySource === "openai") {
+    prioritize = "openai";
+  } else if (traySource === "claude") {
+    prioritize = "anthropic";
+  } else {
+    prioritize = latestProvider(logs) ?? "anthropic";
   }
 
-  const codexUtilization = codexUsage?.rate_limit?.primary_window?.used_percent;
-  if (typeof codexUtilization === "number") {
-    return `${Math.round(codexUtilization)}%`;
+  if (prioritize === "openai") {
+    if (typeof codexUtilization === "number") return `${Math.round(codexUtilization)}%`;
+    if (typeof claudeUtilization === "number") return `${Math.round(claudeUtilization)}%`;
+  } else {
+    if (typeof claudeUtilization === "number") return `${Math.round(claudeUtilization)}%`;
+    if (typeof codexUtilization === "number") return `${Math.round(codexUtilization)}%`;
   }
 
   return formatUsagePercent(totalTokens(logs), DAILY_LIMIT);
@@ -223,6 +226,7 @@ export function usePolling() {
           cost,
           todayLogs,
           preferences.tray_display,
+          preferences.tray_source,
           useStore.getState().claudeUsage,
           useStore.getState().codexUsage,
         );
@@ -306,6 +310,7 @@ export function usePolling() {
             calculateCost(latestTodayLogs),
             latestTodayLogs,
             preferences.tray_display,
+            preferences.tray_source,
             (claudeUsageResult.data as ClaudeUsage | null) ?? null,
             (codexUsageResult.data as CodexUsage | null) ?? null,
           ),
@@ -350,6 +355,7 @@ export function usePolling() {
     cookie,
     preferences.poll_interval,
     preferences.tray_display,
+    preferences.tray_source,
     setMetrics,
     setClaudeUsage,
     setClaudeUsageError,
