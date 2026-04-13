@@ -750,6 +750,20 @@ fn set_tray_title(app: AppHandle, title: String) {
 }
 
 #[tauri::command]
+fn send_notification(title: String, body: String) {
+    let script = format!(
+        "display notification {} with title {}",
+        serde_json::to_string(&body).unwrap_or_default(),
+        serde_json::to_string(&title).unwrap_or_default(),
+    );
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .spawn()
+        .ok();
+}
+
+#[tauri::command]
 fn check_proxy_running() -> bool {
     let anthropic_ok = TcpStream::connect_timeout(
         &"127.0.0.1:8787".parse().unwrap(),
@@ -1285,6 +1299,7 @@ pub fn run() {
             read_local_logs,
             open_logs_folder,
             set_tray_title,
+            send_notification,
             check_proxy_running,
             get_preferences,
             set_preferences,

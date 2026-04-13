@@ -3,6 +3,9 @@ export interface LogRecord {
   request_id: string;
   developer_id: string;
   repo: string;
+  repo_source?: string;
+  repo_pid?: number;
+  repo_cwd?: string;
   provider?: "anthropic" | "openai";
   endpoint?: string;
   model: string;
@@ -78,6 +81,7 @@ export interface Preferences {
   poll_interval: number;
   tray_display: "cost" | "tokens";
   tray_source: "claude" | "openai";
+  notification_threshold: number | null;
 }
 
 export interface UpdateInfo {

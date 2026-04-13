@@ -9,12 +9,40 @@ import {
   getProxyEnabled,
   setTrayTitle,
   forwardLogsToDashboard,
+  sendNotification,
 } from "../lib/api";
 import { calculateCost } from "../lib/cost";
 import { formatCost } from "../lib/format";
 import { DAILY_LIMIT, formatResetTime, formatUsagePercent, totalTokens } from "../lib/usage";
 import { normalizeLogRecords } from "../lib/logs";
 import type { LogRecord, DeveloperMetrics, ClaudeUsage, CodexUsage } from "../lib/types";
+
+type NotificationKey = "claude_session" | "claude_weekly" | "openai_session" | "openai_weekly";
+
+function checkAndNotify(
+  claudeUsage: ClaudeUsage | null,
+  codexUsage: CodexUsage | null,
+  threshold: number,
+  notified: Set<NotificationKey>,
+): void {
+  const checks: { key: NotificationKey; percent: number | undefined; label: string }[] = [
+    { key: "claude_session", percent: claudeUsage?.five_hour?.utilization, label: "Claude session" },
+    { key: "claude_weekly", percent: claudeUsage?.seven_day?.utilization, label: "Claude weekly" },
+    { key: "openai_session", percent: codexUsage?.rate_limit?.primary_window?.used_percent, label: "OpenAI session" },
+    { key: "openai_weekly", percent: codexUsage?.rate_limit?.secondary_window?.used_percent, label: "OpenAI weekly" },
+  ];
+
+  for (const { key, percent, label } of checks) {
+    if (typeof percent !== "number") continue;
+    const rounded = Math.round(percent);
+    if (rounded >= threshold && !notified.has(key)) {
+      notified.add(key);
+      sendNotification("TailorUsage", `${label} usage is at ${rounded}%`).catch(() => {});
+    } else if (rounded < threshold) {
+      notified.delete(key);
+    }
+  }
+}
 
 function parseStatusCode(error: unknown): number | null {
   const message = error instanceof Error ? error.message : String(error);
@@ -182,6 +210,8 @@ export function usePolling() {
   const pollRef = useRef<(() => Promise<void>) | null>(null);
   // Current user's developer_id — derived from local logs (most reliable source)
   const myIdRef = useRef<string | null>(null);
+  // Tracks which usage windows have already triggered a notification (cleared when usage drops below threshold)
+  const notifiedRef = useRef<Set<NotificationKey>>(new Set());
 
   useEffect(() => {
     // Fast poll: read today's logs directly from the local proxy JSONL file
@@ -240,14 +270,22 @@ export function usePolling() {
             getProxyEnabled().catch(() => null),
           ]);
 
-        setClaudeUsage((claudeUsageResult.data as ClaudeUsage | null) ?? null);
+        const claudeUsageData = (claudeUsageResult.data as ClaudeUsage | null) ?? null;
+        const codexUsageData = (codexUsageResult.data as CodexUsage | null) ?? null;
+
+        setClaudeUsage(claudeUsageData);
         setClaudeUsageError(
           claudeUsageResult.error ? formatProviderUsageError("claude", claudeUsageResult.error) : null,
         );
-        setCodexUsage((codexUsageResult.data as CodexUsage | null) ?? null);
+        setCodexUsage(codexUsageData);
         setCodexUsageError(
           codexUsageResult.error ? formatProviderUsageError("openai", codexUsageResult.error) : null,
         );
+
+        const { notification_threshold } = preferences;
+        if (typeof notification_threshold === "number") {
+          checkAndNotify(claudeUsageData, codexUsageData, notification_threshold, notifiedRef.current);
+        }
 
         const normalizedLocalWeekLogs = normalizeLogRecords(localWeekRaw.flat());
 
@@ -288,8 +326,8 @@ export function usePolling() {
             latestTodayLogs,
             preferences.tray_display,
             preferences.tray_source,
-            (claudeUsageResult.data as ClaudeUsage | null) ?? null,
-            (codexUsageResult.data as CodexUsage | null) ?? null,
+            claudeUsageData,
+            codexUsageData,
           ),
         );
 
@@ -333,6 +371,7 @@ export function usePolling() {
     preferences.poll_interval,
     preferences.tray_display,
     preferences.tray_source,
+    preferences.notification_threshold,
     setMetrics,
     setClaudeUsage,
     setClaudeUsageError,

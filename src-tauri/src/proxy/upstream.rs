@@ -2,6 +2,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response};
 use reqwest::header::{HeaderValue, AUTHORIZATION};
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use crate::proxy::logger;
@@ -236,6 +237,8 @@ const SENSITIVE_HEADERS: &[&str] = &["authorization", "x-api-key", "cookie"];
 /// Forward a request to the real upstream API, tap the response for logging.
 pub async fn forward(
     provider: Provider,
+    local_addr: SocketAddr,
+    peer_addr: SocketAddr,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let start = Instant::now();
@@ -425,6 +428,7 @@ pub async fn forward(
         .model
         .filter(|value| !value.is_empty())
         .unwrap_or(req_model);
+    let repo_attribution = logger::get_repo_attribution_for_connection(local_addr, peer_addr);
     let entry = LogEntry {
         ts: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -432,7 +436,10 @@ pub async fn forward(
             .as_millis() as u64,
         request_id: uuid::Uuid::new_v4().to_string(),
         developer_id: logger::get_developer_id(),
-        repo: logger::get_repo_name(),
+        repo: repo_attribution.repo,
+        repo_source: repo_attribution.source,
+        repo_pid: repo_attribution.pid,
+        repo_cwd: repo_attribution.cwd.map(|path| path.display().to_string()),
         provider,
         endpoint: raw_uri_path,
         model,

@@ -13,9 +13,11 @@ use crate::proxy::upstream;
 
 async fn handle_request(
     provider: Provider,
+    local_addr: SocketAddr,
+    peer_addr: SocketAddr,
     req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    upstream::forward(provider, req).await
+    upstream::forward(provider, local_addr, peer_addr, req).await
 }
 
 /// Start a proxy listener on the given port for the given provider.
@@ -38,10 +40,12 @@ pub async fn run_listener(
         tokio::select! {
             result = listener.accept() => {
                 let (stream, _) = result?;
+                let local_addr = stream.local_addr()?;
+                let peer_addr = stream.peer_addr()?;
                 let io = TokioIo::new(stream);
 
                 tokio::spawn(async move {
-                    let svc = service_fn(move |req| handle_request(provider, req));
+                    let svc = service_fn(move |req| handle_request(provider, local_addr, peer_addr, req));
                     if let Err(e) = http1::Builder::new()
                         .serve_connection(io, svc)
                         .await

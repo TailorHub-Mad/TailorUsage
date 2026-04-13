@@ -118,3 +118,7 @@ export async function getHideFromDock(): Promise<boolean> {
 export async function setHideFromDock(enabled: boolean): Promise<void> {
   return invoke("set_hide_from_dock", { enabled });
 }
+
+export async function sendNotification(title: string, body: string): Promise<void> {
+  return invoke("send_notification", { title, body });
+}

@@ -8,6 +8,13 @@ const TRAY_SOURCE_OPTIONS: { label: string; value: Preferences["tray_source"] }[
   { label: "OpenAI", value: "openai" },
 ];
 
+const NOTIFICATION_THRESHOLD_OPTIONS: { label: string; value: number | null }[] = [
+  { label: "Off", value: null },
+  { label: "70%", value: 70 },
+  { label: "80%", value: 80 },
+  { label: "90%", value: 90 },
+];
+
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { preferences, setPreferences, launchAtLogin, setLaunchAtLogin, hideFromDock, setHideFromDock } = useStore();
 
@@ -94,6 +101,25 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 onClick={() => updatePrefs({ tray_source: opt.value })}
                 className={`px-3 py-1.5 text-xs rounded-md transition-colors cursor-pointer ${
                   preferences.tray_source === opt.value
+                    ? "bg-gray-100 text-gray-700 font-medium"
+                    : "text-gray-400 hover:text-gray-600"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-gray-500">Notify when usage above</p>
+          <div className="flex gap-1.5">
+            {NOTIFICATION_THRESHOLD_OPTIONS.map((opt) => (
+              <button
+                key={String(opt.value)}
+                onClick={() => updatePrefs({ notification_threshold: opt.value })}
+                className={`px-3 py-1.5 text-xs rounded-md transition-colors cursor-pointer ${
+                  preferences.notification_threshold === opt.value
                     ? "bg-gray-100 text-gray-700 font-medium"
                     : "text-gray-400 hover:text-gray-600"
                 }`}

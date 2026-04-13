@@ -16,9 +16,10 @@ xattr -dr com.apple.quarantine /Applications/TailorUsage.app
 
 That's it. The app will appear in your Applications folder and can be launched from there.
 
-For updating: 
+For updating:
 ```sh
-brew update && brew update tailorusage
+brew update
+brew upgrade --cask tailorusage
 ```
 
 ---

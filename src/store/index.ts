@@ -58,7 +58,7 @@ export const useStore = create<AppStore>((set) => ({
   todayLogs: [],
   weekLogs: [],
   proxyStatus: { running: false, enabled: false },
-  preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "claude" },
+  preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "claude", notification_threshold: null },
   updateInfo: null,
   appVersion: "",
   launchAtLogin: false,

@@ -32,6 +32,9 @@ describe("normalizeLogRecord", () => {
       request_id: "resp-1",
       developer_id: "dev@example.com",
       repo: "tailor-bar",
+      repo_source: undefined,
+      repo_pid: undefined,
+      repo_cwd: undefined,
       provider: "openai",
       endpoint: "/v1/chat/completions",
       model: "gpt-4o-mini",
@@ -55,6 +58,9 @@ describe("normalizeLogRecord", () => {
       request_id: "00000000-0000-0000-0000-000000000000",
       developer_id: "unknown",
       repo: "unknown",
+      repo_source: undefined,
+      repo_pid: undefined,
+      repo_cwd: undefined,
       provider: "anthropic",
       endpoint: "/v1/messages",
       model: "claude-sonnet-4",
@@ -96,6 +102,25 @@ describe("normalizeLogRecord", () => {
       model: "gpt-5.4",
       input_tokens: 220,
       output_tokens: 40,
+    });
+  });
+
+  it("preserves repo attribution diagnostics when present", () => {
+    expect(
+      normalizeLogRecord({
+        ts: "2026-03-20T10:00:00.000Z",
+        developer_id: "dev@example.com",
+        repo: "TailorUsage",
+        repo_source: "connection_cwd",
+        repo_pid: "12345",
+        repo_cwd: "/Users/nikoto/Desktop/code/ai/TailorUsage",
+        model: "claude-sonnet-4",
+      }),
+    ).toMatchObject({
+      repo: "TailorUsage",
+      repo_source: "connection_cwd",
+      repo_pid: 12345,
+      repo_cwd: "/Users/nikoto/Desktop/code/ai/TailorUsage",
     });
   });
 

@@ -64,7 +64,7 @@ export function PopoverPanel() {
                 proxyStatus.enabled ? "bg-green-400" : "bg-red-400"
               }`}
             />
-            <span className="text-sm text-gray-600">
+            <span className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">
               {proxyStatus.enabled ? "Proxy active" : "Proxy inactive"}
             </span>
             <ProxySwitch

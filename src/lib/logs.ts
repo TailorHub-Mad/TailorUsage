@@ -167,6 +167,9 @@ export function normalizeLogRecord(raw: unknown): LogRecord | null {
       getString(record, [["developer_id"], ["developerId"], ["user_email"], ["userEmail"], ["email"]]) ??
       "unknown",
     repo: getString(record, [["repo"], ["repository"], ["project"]]) ?? "unknown",
+    repo_source: getString(record, [["repo_source"], ["repoSource"]]) ?? undefined,
+    repo_pid: getNumber(record, [["repo_pid"], ["repoPid"]]) ?? undefined,
+    repo_cwd: getString(record, [["repo_cwd"], ["repoCwd"]]) ?? undefined,
     provider,
     endpoint,
     model,
