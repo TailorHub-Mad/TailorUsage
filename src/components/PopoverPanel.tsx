@@ -9,35 +9,39 @@ import { SettingsPanel } from "./SettingsPanel";
 import { resizeWindow, openUrl } from "../lib/api";
 import tailorLogo from "../../src-tauri/icons/new-icon.png";
 
+const OUTER_PADDING = 16;
+
 export function PopoverPanel() {
   const { refresh } = usePolling();
   const { loading, error, proxyStatus, updateInfo } = useStore();
   const { loading: proxyLoading, error: proxyError, showMessage, handleProxyToggle } = useProxyToggleControl();
   const [showSettings, setShowSettings] = useState(false);
+  const [mainContentHeight, setMainContentHeight] = useState<number | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const card = cardRef.current;
     if (!card) return;
     const observer = new ResizeObserver((entries) => {
       const height = entries[0].contentRect.height;
-      resizeWindow(height + 16).catch(() => {}); // 16px = 8px top + 8px bottom from outer p-2
+      resizeWindow(height + OUTER_PADDING * 2).catch(() => {});
     });
     observer.observe(card);
     return () => observer.disconnect();
   }, []);
 
   return (
-    <div className="p-2">
+    <div className="p-4">
       {/* Card with drop shadow */}
       <div
         ref={cardRef}
-        className="bg-white rounded-2xl flex flex-col overflow-hidden"
-        style={{ boxShadow: "0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.10)" }}
+        className="bg-white rounded-xl flex flex-col overflow-hidden"
+        style={{ boxShadow: "0 8px 20px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.07)" }}
       >
         {/* Loading bar */}
         {loading && (
-          <div className="h-0.5 bg-gray-100 overflow-hidden rounded-t-2xl">
+          <div className="h-0.5 bg-gray-100 overflow-hidden rounded-t-xl">
             <div className="h-full w-1/3 bg-gray-400 animate-pulse" />
           </div>
         )}
@@ -95,11 +99,11 @@ export function PopoverPanel() {
         )}
 
         {showSettings ? (
-          <div className="border-t border-gray-100">
+          <div className="border-t border-gray-100" style={mainContentHeight ? { minHeight: mainContentHeight } : {}}>
             <SettingsPanel onClose={() => setShowSettings(false)} />
           </div>
         ) : (
-          <div>
+          <div ref={mainContentRef}>
             <UsageLimitsBar />
             <Divider />
             <WeekSection />
@@ -108,7 +112,12 @@ export function PopoverPanel() {
         )}
 
         <div className="border-t border-gray-100">
-          <Footer onRefresh={refresh} onSettings={() => setShowSettings((s) => !s)} />
+          <Footer onRefresh={refresh} onSettings={() => {
+            if (!showSettings && mainContentRef.current) {
+              setMainContentHeight(mainContentRef.current.offsetHeight);
+            }
+            setShowSettings((s) => !s);
+          }} />
         </div>
       </div>
     </div>

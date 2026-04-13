@@ -22,7 +22,7 @@ function resetStore() {
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
-    preferences: { poll_interval: 900000, tray_display: "tokens" },
+    preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "claude" },
     updateInfo: null,
     appVersion: "0.3.0",
     loading: false,
@@ -46,6 +46,7 @@ describe("Footer", () => {
     expect(apiMocks.setPreferences).toHaveBeenCalledWith({
       poll_interval: 300000,
       tray_display: "tokens",
+      tray_source: "claude",
     });
     expect(useStore.getState().preferences.poll_interval).toBe(300000);
   });

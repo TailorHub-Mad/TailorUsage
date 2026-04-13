@@ -23,6 +23,8 @@ interface AppStore {
   preferences: Preferences;
   updateInfo: UpdateInfo | null;
   appVersion: string;
+  launchAtLogin: boolean;
+  hideFromDock: boolean;
   loading: boolean;
   error: string | null;
 
@@ -38,6 +40,8 @@ interface AppStore {
   setPreferences: (prefs: Preferences) => void;
   setUpdateInfo: (info: UpdateInfo | null) => void;
   setAppVersion: (version: string) => void;
+  setLaunchAtLogin: (enabled: boolean) => void;
+  setHideFromDock: (enabled: boolean) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   signOut: () => void;
@@ -54,9 +58,11 @@ export const useStore = create<AppStore>((set) => ({
   todayLogs: [],
   weekLogs: [],
   proxyStatus: { running: false, enabled: false },
-  preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "auto" },
+  preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "claude" },
   updateInfo: null,
   appVersion: "",
+  launchAtLogin: false,
+  hideFromDock: false,
   loading: false,
   error: null,
 
@@ -73,6 +79,8 @@ export const useStore = create<AppStore>((set) => ({
   setPreferences: (preferences) => set({ preferences }),
   setUpdateInfo: (updateInfo) => set({ updateInfo }),
   setAppVersion: (appVersion) => set({ appVersion }),
+  setLaunchAtLogin: (launchAtLogin) => set({ launchAtLogin }),
+  setHideFromDock: (hideFromDock) => set({ hideFromDock }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   signOut: () =>

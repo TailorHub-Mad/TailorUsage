@@ -457,7 +457,9 @@ async fn start_auth_flow(app: AppHandle) -> Result<(), String> {
                         }
                         app_handle.emit("auth-success", token).ok();
                     } else {
-                        app_handle.emit("auth-success", url.as_str().to_string()).ok();
+                        app_handle
+                            .emit("auth-success", url.as_str().to_string())
+                            .ok();
                         // Close the auth window off the navigation callback to avoid deadlock
                     }
 
@@ -948,6 +950,19 @@ fn load_proxy_enabled_pref(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+fn should_cleanup_stale_proxy_config(proxy_enabled_pref: bool, proxy_running: bool) -> bool {
+    !proxy_enabled_pref && !proxy_running
+}
+
+fn reconcile_proxy_config_on_startup(app: &AppHandle) {
+    let proxy_enabled_pref = load_proxy_enabled_pref(app);
+    let proxy_running = check_proxy_running();
+
+    if should_cleanup_stale_proxy_config(proxy_enabled_pref, proxy_running) {
+        proxy::cleanup_config();
+    }
+}
+
 // --- App Setup ---
 
 fn current_logical_height(window: &tauri::WebviewWindow) -> f64 {
@@ -1061,16 +1076,90 @@ fn keep_window_visible(state: tauri::State<'_, AppState>) {
 #[tauri::command]
 fn resize_window(window: tauri::WebviewWindow, height: f64) {
     let clamped = height.clamp(200.0, 900.0);
-    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(450.0, clamped)));
+    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+        450.0, clamped,
+    )));
+}
+
+// --- Dock visibility ---
+
+fn read_hide_from_dock_pref(app: &AppHandle) -> bool {
+    let path = preferences_path(app);
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .and_then(|v| v["hide_from_dock"].as_bool())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn apply_dock_visibility(app: &AppHandle, hide: bool) {
+    let policy = if hide {
+        tauri::ActivationPolicy::Accessory
+    } else {
+        tauri::ActivationPolicy::Regular
+    };
+    let _ = app.set_activation_policy(policy);
+}
+
+#[tauri::command]
+fn get_hide_from_dock(app: AppHandle) -> bool {
+    read_hide_from_dock_pref(&app)
+}
+
+#[tauri::command]
+fn set_hide_from_dock(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let path = preferences_path(&app);
+    let mut prefs: serde_json::Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|d| serde_json::from_str(&d).ok())
+        .unwrap_or(serde_json::json!({}));
+    prefs["hide_from_dock"] = serde_json::Value::Bool(enabled);
+    fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap())
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        // Refresh last_shown so the blur handler's 800ms guard keeps the window visible
+        // while macOS processes the activation policy change (which can fire a focus-loss event).
+        *state.last_shown.lock().unwrap() = Some(Instant::now());
+        apply_dock_visibility(&app, enabled);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_launch_at_login(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             migrate_proxy_dir();
+            reconcile_proxy_config_on_startup(app.handle());
 
             // Load persisted cookie
             if let Some(cookie) = load_persisted_cookie(app.handle()) {
@@ -1117,12 +1206,22 @@ pub fn run() {
                     Ok(h) => Some(h),
                     Err(e) => {
                         log::warn!("Failed to auto-start proxy: {}", e);
+                        if !check_proxy_running() {
+                            proxy::cleanup_config();
+                            set_proxy_enabled_pref(app.handle(), false);
+                        }
                         None
                     }
                 }
             } else {
                 None
             };
+
+            // Apply dock visibility preference on startup
+            #[cfg(target_os = "macos")]
+            if read_hide_from_dock_pref(app.handle()) {
+                apply_dock_visibility(app.handle(), true);
+            }
 
             // Store everything in managed state (keeps tray alive)
             app.manage(AppState {
@@ -1150,6 +1249,11 @@ pub fn run() {
             let app_handle2 = app.handle().clone();
             if let Some(window) = app.get_webview_window("main") {
                 resize_and_center_main_window(&window);
+                // Join all Spaces so the popover appears on the user's current Space
+                // instead of forcing a Space switch when another app is fullscreen.
+                // The blur-hide handler ensures it disappears when the user moves away.
+                #[cfg(target_os = "macos")]
+                window.set_visible_on_all_workspaces(true).ok();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Focused(false) = event {
                         if let Some(state) = app_handle2.try_state::<AppState>() {
@@ -1193,6 +1297,10 @@ pub fn run() {
             keep_window_visible,
             forward_logs_to_dashboard,
             resize_window,
+            get_launch_at_login,
+            set_launch_at_login,
+            get_hide_from_dock,
+            set_hide_from_dock,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -1217,4 +1325,24 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_cleanup_stale_proxy_config;
+
+    #[test]
+    fn cleans_stale_proxy_config_when_proxy_is_disabled_and_not_running() {
+        assert!(should_cleanup_stale_proxy_config(false, false));
+    }
+
+    #[test]
+    fn keeps_proxy_config_when_proxy_is_enabled_in_preferences() {
+        assert!(!should_cleanup_stale_proxy_config(true, false));
+    }
+
+    #[test]
+    fn keeps_proxy_config_when_another_proxy_instance_is_running() {
+        assert!(!should_cleanup_stale_proxy_config(false, true));
+    }
 }

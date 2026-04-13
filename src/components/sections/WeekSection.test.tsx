@@ -39,7 +39,7 @@ function resetStore() {
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
-    preferences: { poll_interval: 900000, tray_display: "cost" },
+    preferences: { poll_interval: 900000, tray_display: "cost", tray_source: "claude" },
     loading: false,
     error: null,
   });
@@ -58,7 +58,7 @@ describe("WeekSection", () => {
     capturedXAxisProps = undefined;
   });
 
-  it("renders a weekly activity chart when there are calls this week", () => {
+  it("renders a past-7-days activity chart when there are calls", () => {
     useStore.setState({
       weekLogs: [
         ...Array.from({ length: 4 }, (_, index) => ({
@@ -126,7 +126,7 @@ describe("WeekSection", () => {
 
     render(<WeekSection />);
 
-    expect(screen.getByLabelText("Weekly activity chart")).toBeInTheDocument();
+    expect(screen.getByLabelText("Past 7 days activity chart")).toBeInTheDocument();
     expect(
       screen.getByText((_, element) => element?.textContent === "42 calls across 4 active days"),
     ).toBeInTheDocument();
@@ -135,7 +135,7 @@ describe("WeekSection", () => {
     expect(screen.getByText("42 contributions")).toBeInTheDocument();
     expect(screen.getByText("Top 3 models")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet-4")).toBeInTheDocument();
-    expect(screen.queryByText("No activity this week")).not.toBeInTheDocument();
+    expect(screen.queryByText("No activity in the past 7 days")).not.toBeInTheDocument();
     expect(capturedLineChartProps?.margin?.left).toBe(0);
     expect(capturedXAxisProps?.padding).toEqual({ left: 12, right: 12 });
   });

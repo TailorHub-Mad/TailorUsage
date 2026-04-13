@@ -28,7 +28,7 @@ function resetStore() {
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
-    preferences: { poll_interval: 900000, tray_display: "cost" },
+    preferences: { poll_interval: 900000, tray_display: "cost", tray_source: "claude" },
     loading: false,
     error: null,
   });
@@ -137,7 +137,7 @@ describe("usePolling", () => {
     const today = isoDate(0);
 
     useStore.setState({
-      preferences: { poll_interval: 900000, tray_display: "tokens" },
+      preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "claude" },
     });
 
     apiMocks.readLocalLogs.mockResolvedValue([
@@ -168,7 +168,7 @@ describe("usePolling", () => {
     const today = isoDate(0);
 
     useStore.setState({
-      preferences: { poll_interval: 900000, tray_display: "tokens" },
+      preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "claude" },
     });
 
     apiMocks.readLocalLogs.mockResolvedValue([
@@ -202,7 +202,7 @@ describe("usePolling", () => {
     const today = isoDate(0);
 
     useStore.setState({
-      preferences: { poll_interval: 900000, tray_display: "tokens" },
+      preferences: { poll_interval: 900000, tray_display: "tokens", tray_source: "openai" },
     });
 
     apiMocks.readLocalLogs.mockResolvedValue([

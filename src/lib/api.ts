@@ -102,3 +102,19 @@ export async function forwardLogsToDashboard(): Promise<number> {
 export async function resizeWindow(height: number): Promise<void> {
   return invoke("resize_window", { height });
 }
+
+export async function getLaunchAtLogin(): Promise<boolean> {
+  return invoke("get_launch_at_login");
+}
+
+export async function setLaunchAtLogin(enabled: boolean): Promise<void> {
+  return invoke("set_launch_at_login", { enabled });
+}
+
+export async function getHideFromDock(): Promise<boolean> {
+  return invoke("get_hide_from_dock");
+}
+
+export async function setHideFromDock(enabled: boolean): Promise<void> {
+  return invoke("set_hide_from_dock", { enabled });
+}

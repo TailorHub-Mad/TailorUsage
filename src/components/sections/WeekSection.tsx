@@ -11,17 +11,15 @@ function dayKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function startOfCurrentWeek(): Date {
+function startOfRollingWeek(): Date {
   const date = new Date();
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + diff);
+  date.setDate(date.getDate() - 6);
   date.setHours(0, 0, 0, 0);
   return date;
 }
 
 function buildWeekActivity(weekLogs: ReturnType<typeof useStore.getState>["weekLogs"]) {
-  const weekStart = startOfCurrentWeek();
+  const weekStart = startOfRollingWeek();
 
   const counts = new Map<string, number>();
   for (const log of weekLogs) {
@@ -121,7 +119,7 @@ export function WeekSection() {
         <div style={{ overflow: "hidden" }}>
           {totalCalls > 0 ? (
             <>
-              <div className="mb-3 h-28" aria-label="Weekly activity chart">
+              <div className="mb-3 h-28" aria-label="Past 7 days activity chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={weekActivity} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="#f3f4f6" strokeDasharray="3 3" vertical={false} />
@@ -155,7 +153,7 @@ export function WeekSection() {
               </div>
             </>
           ) : (
-            <p className="text-xs text-gray-300 text-center py-2">No activity this week</p>
+            <p className="text-xs text-gray-300 text-center py-2">No activity in the past 7 days</p>
           )}
 
           {topRepos.length > 0 && (

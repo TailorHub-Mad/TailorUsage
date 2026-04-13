@@ -58,22 +58,11 @@ function formatProviderUsageError(provider: "claude" | "openai", error: unknown)
   return "Usage request failed. Try again later.";
 }
 
-function latestProvider(logs: LogRecord[]): "anthropic" | "openai" | null {
-  const latestLog = [...logs].sort((a, b) => {
-    const aTime = typeof a.ts === "number" ? a.ts : new Date(String(a.ts)).getTime();
-    const bTime = typeof b.ts === "number" ? b.ts : new Date(String(b.ts)).getTime();
-    return bTime - aTime;
-  })[0];
-
-  if (!latestLog) return null;
-  return latestLog.provider === "openai" ? "openai" : "anthropic";
-}
-
 function formatTrayTitle(
   cost: number,
   logs: LogRecord[],
   trayDisplay: "cost" | "tokens",
-  traySource: "auto" | "claude" | "openai",
+  traySource: "claude" | "openai",
   claudeUsage: ClaudeUsage | null,
   codexUsage: CodexUsage | null,
 ): string {
@@ -84,14 +73,7 @@ function formatTrayTitle(
   const claudeUtilization = claudeUsage?.five_hour?.utilization;
   const codexUtilization = codexUsage?.rate_limit?.primary_window?.used_percent;
 
-  let prioritize: "anthropic" | "openai";
-  if (traySource === "openai") {
-    prioritize = "openai";
-  } else if (traySource === "claude") {
-    prioritize = "anthropic";
-  } else {
-    prioritize = latestProvider(logs) ?? "anthropic";
-  }
+  const prioritize: "anthropic" | "openai" = traySource === "openai" ? "openai" : "anthropic";
 
   if (prioritize === "openai") {
     if (typeof codexUtilization === "number") return `${Math.round(codexUtilization)}%`;
@@ -157,27 +139,22 @@ function todayStr(): string {
   return formatDate(new Date());
 }
 
-function currentWeekStart(): Date {
+function rollingWeekStart(): Date {
   const date = new Date();
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + diff);
+  date.setDate(date.getDate() - 6);
   date.setHours(0, 0, 0, 0);
   return date;
 }
 
 function weekStartStr(): string {
-  const d = currentWeekStart();
+  const d = rollingWeekStart();
   return formatDate(d);
 }
 
 function currentWeekDateStrings(): string[] {
-  const start = currentWeekStart();
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const days = Math.floor((today.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  const start = rollingWeekStart();
 
-  return Array.from({ length: days }, (_, index) => {
+  return Array.from({ length: 7 }, (_, index) => {
     const date = new Date(start);
     date.setDate(start.getDate() + index);
     return formatDate(date);
