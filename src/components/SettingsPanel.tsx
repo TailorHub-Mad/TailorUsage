@@ -1,6 +1,10 @@
-import { useEffect } from "react";
 import { useStore } from "../store";
-import { setPreferences as savePreferences, getLaunchAtLogin, setLaunchAtLogin as saveLaunchAtLogin, getHideFromDock, setHideFromDock as saveHideFromDock } from "../lib/api";
+import {
+  setPreferences as savePreferences,
+  setLaunchAtLogin as saveLaunchAtLogin,
+  setHideFromDock as saveHideFromDock,
+  openLogsFolder,
+} from "../lib/api";
 import type { Preferences } from "../lib/types";
 
 const TRAY_SOURCE_OPTIONS: { label: string; value: Preferences["tray_source"] }[] = [
@@ -17,11 +21,6 @@ const NOTIFICATION_THRESHOLD_OPTIONS: { label: string; value: number | null }[] 
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { preferences, setPreferences, launchAtLogin, setLaunchAtLogin, hideFromDock, setHideFromDock } = useStore();
-
-  useEffect(() => {
-    getLaunchAtLogin().then(setLaunchAtLogin).catch(() => {});
-    getHideFromDock().then(setHideFromDock).catch(() => {});
-  }, []);
 
   const updatePrefs = async (update: Partial<Preferences>) => {
     const newPrefs = { ...preferences, ...update };
@@ -128,6 +127,16 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-gray-500">Debug logs</p>
+          <button
+            onClick={() => openLogsFolder().catch(() => {})}
+            className="text-xs font-medium text-gray-500 underline decoration-gray-300 underline-offset-2 transition-colors hover:text-gray-700 cursor-pointer"
+          >
+            Open Logs
+          </button>
         </div>
       </div>
     </div>

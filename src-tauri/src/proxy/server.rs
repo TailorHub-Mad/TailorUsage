@@ -48,6 +48,7 @@ pub async fn run_listener(
                     let svc = service_fn(move |req| handle_request(provider, local_addr, peer_addr, req));
                     if let Err(e) = http1::Builder::new()
                         .serve_connection(io, svc)
+                        .with_upgrades()
                         .await
                     {
                         if !e.to_string().contains("connection closed") {

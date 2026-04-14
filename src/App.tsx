@@ -1,7 +1,13 @@
 import { Component, useEffect, type ReactNode } from "react";
 import { useStore } from "./store";
 import { PopoverPanel } from "./components/PopoverPanel";
-import { checkForUpdate, getAppVersion } from "./lib/api";
+import {
+  checkForUpdate,
+  getAppVersion,
+  getHideFromDock,
+  getLaunchAtLogin,
+  getPreferences,
+} from "./lib/api";
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -23,11 +29,23 @@ class ErrorBoundary extends Component<
 }
 
 function App() {
-  const { setUpdateInfo, setAppVersion } = useStore();
+  const {
+    setAppVersion,
+    setHideFromDock,
+    setLaunchAtLogin,
+    setPreferences,
+    setUpdateInfo,
+  } = useStore();
 
   useEffect(() => {
     getAppVersion().then(setAppVersion).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    getPreferences().then(setPreferences).catch(() => {});
+    getLaunchAtLogin().then(setLaunchAtLogin).catch(() => {});
+    getHideFromDock().then(setHideFromDock).catch(() => {});
+  }, [setHideFromDock, setLaunchAtLogin, setPreferences]);
 
   useEffect(() => {
     checkForUpdate().then(setUpdateInfo).catch(() => {});

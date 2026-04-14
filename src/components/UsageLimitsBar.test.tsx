@@ -21,7 +21,12 @@ function resetStore() {
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
-    preferences: { poll_interval: 900000, tray_display: "cost", tray_source: "claude" },
+    preferences: {
+      poll_interval: 900000,
+      tray_display: "cost",
+      tray_source: "claude",
+      notification_threshold: null,
+    },
     loading: false,
     error: null,
   });

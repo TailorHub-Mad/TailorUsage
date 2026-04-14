@@ -39,7 +39,7 @@ function resetStore() {
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
-    preferences: { poll_interval: 900000, tray_display: "cost", tray_source: "claude" },
+    preferences: { poll_interval: 900000, tray_display: "cost", tray_source: "claude", notification_threshold: null },
     loading: false,
     error: null,
   });
@@ -133,7 +133,7 @@ describe("WeekSection", () => {
     expect(screen.getByText("Top 3 repos")).toBeInTheDocument();
     expect(screen.getByText("tailor-bar")).toBeInTheDocument();
     expect(screen.getByText("42 contributions")).toBeInTheDocument();
-    expect(screen.getByText("Top 3 models")).toBeInTheDocument();
+    expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet-4")).toBeInTheDocument();
     expect(screen.queryByText("No activity in the past 7 days")).not.toBeInTheDocument();
     expect(capturedLineChartProps?.margin?.left).toBe(0);
@@ -347,7 +347,7 @@ describe("WeekSection", () => {
 
     render(<WeekSection />);
 
-    const modelSummary = screen.getByText("Top 3 models").parentElement;
+    const modelSummary = screen.getByText("Top models").parentElement;
     expect(modelSummary).not.toBeNull();
     const summaryText = modelSummary?.textContent ?? "";
 
@@ -356,6 +356,82 @@ describe("WeekSection", () => {
     expect(summaryText).toContain("3.o33 calls");
     expect(summaryText.indexOf("1.claude-sonnet-4")).toBeLessThan(summaryText.indexOf("2.gpt-4.1"));
     expect(summaryText.indexOf("2.gpt-4.1")).toBeLessThan(summaryText.indexOf("3.o3"));
-    expect(screen.queryByText("claude-haiku-3")).not.toBeInTheDocument();
+    expect(summaryText).toContain("4.claude-haiku-32 calls");
+  });
+
+  it("shows a warning when OpenAI usage exists without recent OpenAI logs", () => {
+    useStore.setState({
+      codexUsage: {
+        rate_limit: {
+          primary_window: {
+            used_percent: 79,
+            reset_at: 1_776_000_000,
+            limit_window_seconds: 3600,
+          },
+        },
+      },
+      weekLogs: [
+        {
+          ts: "2026-03-20T11:00:00.000Z",
+          request_id: "req-model-warning",
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "anthropic",
+          endpoint: "/v1/messages",
+          model: "claude-sonnet-4",
+          stream: false,
+          status: 200,
+          latency_ms: 120,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        },
+      ],
+    });
+
+    render(<WeekSection />);
+
+    expect(
+      screen.getByText(
+        "OpenAI usage was detected, but no recent OpenAI model logs were captured. OpenCode may be using an unproxied provider.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the OpenAI warning once recent OpenAI logs exist", () => {
+    useStore.setState({
+      codexUsage: {
+        rate_limit: {
+          primary_window: {
+            used_percent: 79,
+            reset_at: 1_776_000_000,
+            limit_window_seconds: 3600,
+          },
+        },
+      },
+      weekLogs: [
+        {
+          ts: "2026-03-20T11:00:00.000Z",
+          request_id: "req-model-openai",
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "openai",
+          endpoint: "/v1/responses",
+          model: "gpt-5.4",
+          stream: true,
+          status: 200,
+          latency_ms: 120,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        },
+      ],
+    });
+
+    render(<WeekSection />);
+
+    expect(
+      screen.queryByText(/OpenAI usage was detected, but no recent OpenAI model logs were captured/),
+    ).not.toBeInTheDocument();
   });
 });

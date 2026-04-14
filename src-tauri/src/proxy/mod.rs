@@ -84,6 +84,11 @@ pub fn start(config: ProxyConfig) -> Result<ProxyHandle, String> {
     {
         log::warn!("Failed to update opencode config: {}", e);
     }
+    if let Err(e) =
+        config_writer::enable_opencode_wrappers(config.anthropic_port, config.openai_port)
+    {
+        log::warn!("Failed to install opencode wrappers: {}", e);
+    }
 
     Ok(ProxyHandle {
         shutdown_tx,
@@ -101,5 +106,8 @@ pub fn cleanup_config() {
     }
     if let Err(e) = config_writer::disable_opencode_config() {
         log::warn!("Failed to clean opencode config: {}", e);
+    }
+    if let Err(e) = config_writer::disable_opencode_wrappers() {
+        log::warn!("Failed to clean opencode wrappers: {}", e);
     }
 }

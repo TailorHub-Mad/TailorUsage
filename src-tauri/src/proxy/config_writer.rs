@@ -5,6 +5,7 @@ const SENTINEL_START: &str = "# --- TailorUsage Proxy (managed) ---";
 const SENTINEL_END: &str = "# --- End TailorUsage Proxy ---";
 const LEGACY_SENTINEL_START: &str = "# --- Tailor Bar Proxy (managed) ---";
 const LEGACY_SENTINEL_END: &str = "# --- End Tailor Bar Proxy ---";
+const OPENCODE_WRAPPER_MARKER: &str = "# TailorUsage managed OpenCode proxy wrapper";
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
@@ -15,9 +16,114 @@ fn proxy_block(anthropic_port: u16, openai_port: u16) -> String {
     // only the resource path (e.g. /chat/completions) to this value.
     // ANTHROPIC_BASE_URL does NOT include /v1 — the Anthropic SDK adds it.
     format!(
-        "{}\nexport ANTHROPIC_BASE_URL=\"http://127.0.0.1:{}\"\nexport OPENAI_BASE_URL=\"http://127.0.0.1:{}/v1\"\n{}",
+        "{}\nexport PATH=\"$HOME/.local/bin:$PATH\"\nexport ANTHROPIC_BASE_URL=\"http://127.0.0.1:{}\"\nexport OPENAI_BASE_URL=\"http://127.0.0.1:{}/v1\"\n{}",
         SENTINEL_START, anthropic_port, openai_port, SENTINEL_END
     )
+}
+
+fn managed_opencode_wrapper(anthropic_port: u16, openai_port: u16) -> String {
+    format!(
+        r#"#!/usr/bin/env bash
+{marker}
+set -euo pipefail
+
+AUTH_FILE="${{HOME}}/.local/share/opencode/auth.json"
+REAL_OPENCODE="${{HOME}}/.opencode/bin/opencode"
+
+export ANTHROPIC_BASE_URL="http://127.0.0.1:{anthropic_port}/v1"
+export OPENAI_BASE_URL="http://127.0.0.1:{openai_port}/v1"
+
+# Keep proxied sessions/state separate so OpenCode does not fall back to its
+# direct auth store and silently bypass the local proxy.
+export XDG_DATA_HOME="${{HOME}}/.local/share/opencode-proxied"
+mkdir -p "${{XDG_DATA_HOME}}"
+
+if [ -f "${{AUTH_FILE}}" ]; then
+  if [ -z "${{OPENAI_API_KEY:-}}" ]; then
+    OPENAI_API_KEY="$(jq -r '.openai.access // empty' "${{AUTH_FILE}}")"
+    if [ -n "${{OPENAI_API_KEY}}" ]; then
+      export OPENAI_API_KEY
+    fi
+  fi
+
+  if [ -z "${{ANTHROPIC_API_KEY:-}}" ]; then
+    ANTHROPIC_API_KEY="$(jq -r '.anthropic.access // empty' "${{AUTH_FILE}}")"
+    if [ -n "${{ANTHROPIC_API_KEY}}" ]; then
+      export ANTHROPIC_API_KEY
+    fi
+  fi
+fi
+
+exec "${{REAL_OPENCODE}}" "$@"
+"#,
+        marker = OPENCODE_WRAPPER_MARKER,
+        anthropic_port = anthropic_port,
+        openai_port = openai_port
+    )
+}
+
+fn write_managed_wrapper(path: &PathBuf, contents: &str) -> Result<(), String> {
+    if path.exists() {
+        let existing = fs::read_to_string(path).map_err(|e| e.to_string())?;
+        if !existing.contains(OPENCODE_WRAPPER_MARKER) && existing != contents {
+            return Err(format!(
+                "Refusing to overwrite unmanaged wrapper at {}",
+                path.display()
+            ));
+        }
+    }
+
+    fs::write(path, contents).map_err(|e| e.to_string())?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn remove_managed_wrapper(path: &PathBuf) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let existing = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    if existing.contains(OPENCODE_WRAPPER_MARKER) {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+pub fn enable_opencode_wrappers(anthropic_port: u16, openai_port: u16) -> Result<(), String> {
+    let home = home_dir().ok_or("Cannot determine home directory")?;
+    let bin_dir = home.join(".local").join("bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    let wrapper = managed_opencode_wrapper(anthropic_port, openai_port);
+    for wrapper_name in ["opencode", "opencode-proxied"] {
+        let path = bin_dir.join(wrapper_name);
+        write_managed_wrapper(&path, &wrapper)?;
+    }
+
+    Ok(())
+}
+
+pub fn disable_opencode_wrappers() -> Result<(), String> {
+    let home = home_dir().ok_or("Cannot determine home directory")?;
+    let bin_dir = home.join(".local").join("bin");
+
+    for wrapper_name in ["opencode", "opencode-proxied"] {
+        let path = bin_dir.join(wrapper_name);
+        remove_managed_wrapper(&path)?;
+    }
+
+    Ok(())
 }
 
 /// Remove the sentinel block from a file's content.
@@ -185,6 +291,134 @@ fn set_provider_base_url(
     }
 }
 
+fn string_at_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a str> {
+    let mut current = value;
+
+    for key in path {
+        current = current.get(*key)?;
+    }
+
+    current
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn model_name_looks_openai(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("gpt-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.contains("codex")
+        || model.starts_with("text-embedding-")
+        || model.starts_with("text-moderation-")
+        || model.starts_with("omni-moderation-")
+}
+
+fn base_url_looks_openai(url: &str) -> bool {
+    let url = url.trim().to_ascii_lowercase();
+    url.contains("api.openai.com")
+        || url.contains("openrouter.ai")
+        || (url.contains("azure.com") && url.contains("/openai"))
+}
+
+fn provider_looks_openai_compatible(name: &str, value: &serde_json::Value) -> bool {
+    if name.eq_ignore_ascii_case("openai") {
+        return true;
+    }
+
+    if let Some(api) = string_at_path(value, &["api"]) {
+        let api = api.to_ascii_lowercase();
+        if api.contains("openai") || api.contains("openrouter") || api.contains("azure") {
+            return true;
+        }
+    }
+
+    if let Some(api) = string_at_path(value, &["provider", "api"]) {
+        let api = api.to_ascii_lowercase();
+        if api.contains("openai") || api.contains("openrouter") || api.contains("azure") {
+            return true;
+        }
+    }
+
+    if let Some(base_url) = string_at_path(value, &["options", "baseURL"]) {
+        if base_url_looks_openai(base_url) {
+            return true;
+        }
+    }
+
+    value
+        .get("models")
+        .and_then(|models| models.as_object())
+        .map(|models| {
+            models.iter().any(|(model_key, model_value)| {
+                model_name_looks_openai(model_key)
+                    || string_at_path(model_value, &["id"])
+                        .map(model_name_looks_openai)
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn rewrite_opencode_provider_base_urls(
+    config: &mut serde_json::Value,
+    anthropic_port: u16,
+    openai_port: u16,
+) {
+    let Some(obj) = config.as_object_mut() else {
+        return;
+    };
+
+    let provider = obj
+        .entry("provider".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(provider) = provider.as_object_mut() else {
+        return;
+    };
+
+    set_provider_base_url(
+        provider,
+        "anthropic",
+        &format!("http://127.0.0.1:{}/v1", anthropic_port),
+    );
+
+    let openai_proxy_url = format!("http://127.0.0.1:{}/v1", openai_port);
+    let provider_names = provider.keys().cloned().collect::<Vec<_>>();
+    for name in provider_names {
+        let should_patch = provider
+            .get(&name)
+            .map(|value| provider_looks_openai_compatible(&name, value))
+            .unwrap_or(false);
+
+        if should_patch {
+            set_provider_base_url(provider, &name, &openai_proxy_url);
+        }
+    }
+}
+
+fn remove_opencode_provider_base_urls(config: &mut serde_json::Value) {
+    let Some(provider) = config.get_mut("provider").and_then(|p| p.as_object_mut()) else {
+        return;
+    };
+
+    let provider_names = provider.keys().cloned().collect::<Vec<_>>();
+    for name in provider_names {
+        let should_cleanup = provider
+            .get(&name)
+            .map(|value| {
+                name.eq_ignore_ascii_case("anthropic")
+                    || provider_looks_openai_compatible(&name, value)
+            })
+            .unwrap_or(false);
+
+        if should_cleanup {
+            remove_provider_base_url(provider, &name);
+        }
+    }
+}
+
 fn remove_provider_base_url(provider: &mut serde_json::Map<String, serde_json::Value>, name: &str) {
     let Some(entry) = provider.get_mut(name).and_then(|e| e.as_object_mut()) else {
         return;
@@ -219,25 +453,11 @@ pub fn enable_opencode_config(anthropic_port: u16, openai_port: u16) -> Result<(
         serde_json::json!({})
     };
 
-    let obj = config
-        .as_object_mut()
-        .ok_or("Invalid opencode.json format")?;
-    let provider = obj
-        .entry("provider".to_string())
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()
-        .ok_or("Invalid provider field in opencode.json")?;
+    if !config.is_object() {
+        return Err("Invalid opencode.json format".to_string());
+    }
 
-    set_provider_base_url(
-        provider,
-        "anthropic",
-        &format!("http://127.0.0.1:{}/v1", anthropic_port),
-    );
-    set_provider_base_url(
-        provider,
-        "openai",
-        &format!("http://127.0.0.1:{}/v1", openai_port),
-    );
+    rewrite_opencode_provider_base_urls(&mut config, anthropic_port, openai_port);
 
     fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
     let pretty = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
@@ -259,13 +479,155 @@ pub fn disable_opencode_config() -> Result<(), String> {
     let mut config: serde_json::Value =
         serde_json::from_str(&data).unwrap_or(serde_json::json!({}));
 
-    if let Some(provider) = config.get_mut("provider").and_then(|p| p.as_object_mut()) {
-        remove_provider_base_url(provider, "anthropic");
-        remove_provider_base_url(provider, "openai");
-    }
+    remove_opencode_provider_base_urls(&mut config);
 
     let pretty = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(&config_path, pretty).map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        managed_opencode_wrapper, model_name_looks_openai, provider_looks_openai_compatible,
+        proxy_block, remove_opencode_provider_base_urls, rewrite_opencode_provider_base_urls,
+    };
+
+    #[test]
+    fn shell_proxy_block_prepends_local_bin() {
+        let block = proxy_block(8787, 8788);
+
+        assert!(block.contains("export PATH=\"$HOME/.local/bin:$PATH\""));
+        assert!(block.contains("export OPENAI_BASE_URL=\"http://127.0.0.1:8788/v1\""));
+    }
+
+    #[test]
+    fn opencode_wrapper_forces_proxy_settings() {
+        let wrapper = managed_opencode_wrapper(8787, 8788);
+
+        assert!(wrapper.contains("export XDG_DATA_HOME=\"${HOME}/.local/share/opencode-proxied\""));
+        assert!(wrapper.contains("export OPENAI_BASE_URL=\"http://127.0.0.1:8788/v1\""));
+        assert!(wrapper.contains("REAL_OPENCODE=\"${HOME}/.opencode/bin/opencode\""));
+        assert!(wrapper.contains("exec \"${REAL_OPENCODE}\" \"$@\""));
+    }
+
+    #[test]
+    fn detects_openai_like_model_names() {
+        assert!(model_name_looks_openai("gpt-5.4"));
+        assert!(model_name_looks_openai("o3"));
+        assert!(model_name_looks_openai("gpt-5-codex"));
+        assert!(model_name_looks_openai("text-embedding-3-large"));
+        assert!(!model_name_looks_openai("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn detects_openai_compatible_provider_entries() {
+        assert!(provider_looks_openai_compatible(
+            "openai",
+            &serde_json::json!({ "options": { "baseURL": "https://example.com" } })
+        ));
+        assert!(provider_looks_openai_compatible(
+            "gateway",
+            &serde_json::json!({ "api": "openai-responses" })
+        ));
+        assert!(provider_looks_openai_compatible(
+            "router",
+            &serde_json::json!({ "options": { "baseURL": "https://openrouter.ai/api/v1" } })
+        ));
+        assert!(provider_looks_openai_compatible(
+            "custom",
+            &serde_json::json!({
+                "models": {
+                    "reasoner": { "id": "gpt-5.4" }
+                }
+            })
+        ));
+        assert!(!provider_looks_openai_compatible(
+            "anthropic",
+            &serde_json::json!({ "api": "anthropic" })
+        ));
+    }
+
+    #[test]
+    fn rewrites_all_recognized_openai_compatible_providers() {
+        let mut config = serde_json::json!({
+            "provider": {
+                "anthropic": {},
+                "openai": {},
+                "openrouter": {
+                    "options": { "baseURL": "https://openrouter.ai/api/v1" }
+                },
+                "custom-gpt": {
+                    "models": {
+                        "fast": { "id": "gpt-5.4" }
+                    }
+                },
+                "bedrock": {
+                    "api": "bedrock"
+                }
+            }
+        });
+
+        rewrite_opencode_provider_base_urls(&mut config, 8787, 8788);
+
+        assert_eq!(
+            config["provider"]["anthropic"]["options"]["baseURL"],
+            serde_json::json!("http://127.0.0.1:8787/v1")
+        );
+        assert_eq!(
+            config["provider"]["openai"]["options"]["baseURL"],
+            serde_json::json!("http://127.0.0.1:8788/v1")
+        );
+        assert_eq!(
+            config["provider"]["openrouter"]["options"]["baseURL"],
+            serde_json::json!("http://127.0.0.1:8788/v1")
+        );
+        assert_eq!(
+            config["provider"]["custom-gpt"]["options"]["baseURL"],
+            serde_json::json!("http://127.0.0.1:8788/v1")
+        );
+        assert!(config["provider"]["bedrock"]["options"]["baseURL"].is_null());
+    }
+
+    #[test]
+    fn removes_proxy_urls_for_rewritten_providers() {
+        let mut config = serde_json::json!({
+            "provider": {
+                "anthropic": {
+                    "options": { "baseURL": "http://127.0.0.1:8787/v1" }
+                },
+                "openai": {
+                    "options": { "baseURL": "http://127.0.0.1:8788/v1", "timeout": 123 }
+                },
+                "custom-gpt": {
+                    "models": {
+                        "fast": { "id": "gpt-5.4" }
+                    },
+                    "options": { "baseURL": "http://127.0.0.1:8788/v1", "apiKey": "abc" }
+                },
+                "bedrock": {
+                    "options": { "baseURL": "https://bedrock.aws" }
+                }
+            }
+        });
+
+        remove_opencode_provider_base_urls(&mut config);
+
+        assert!(config["provider"]["anthropic"]["options"]["baseURL"].is_null());
+        assert!(config["provider"]["openai"]["options"]["baseURL"].is_null());
+        assert_eq!(
+            config["provider"]["openai"]["options"]["timeout"],
+            serde_json::json!(123)
+        );
+        assert!(config["provider"]["custom-gpt"]["options"]["baseURL"].is_null());
+        assert_eq!(
+            config["provider"]["custom-gpt"]["options"]["apiKey"],
+            serde_json::json!("abc")
+        );
+        assert_eq!(
+            config["provider"]["bedrock"]["options"]["baseURL"],
+            serde_json::json!("https://bedrock.aws")
+        );
+    }
 }

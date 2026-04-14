@@ -1,6 +1,6 @@
 [package]
 name = "tailor-usage"
-version = "0.7.0"
+version = "0.7.1"
 description = "Mac menu bar app for Tailor usage metrics"
 authors = ["you"]
 edition = "2021"
@@ -29,3 +29,7 @@ bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 log = "0.4"
+base64 = "0.22"
+futures-util = "0.3"
+sha1 = "0.10"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }

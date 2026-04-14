@@ -341,8 +341,14 @@ n127.0.0.1:53123->127.0.0.1:8787
         };
 
         let value = serde_json::to_value(entry).expect("serialize log entry");
-        assert_eq!(value.get("repo_source").and_then(|value| value.as_str()), Some("connection_cwd"));
-        assert_eq!(value.get("repo_pid").and_then(|value| value.as_u64()), Some(12345));
+        assert_eq!(
+            value.get("repo_source").and_then(|value| value.as_str()),
+            Some("connection_cwd")
+        );
+        assert_eq!(
+            value.get("repo_pid").and_then(|value| value.as_u64()),
+            Some(12345)
+        );
         assert_eq!(
             value.get("repo_cwd").and_then(|value| value.as_str()),
             Some("/Users/nikoto/Desktop/code/ai/TailorUsage")

@@ -61,7 +61,7 @@ function rankUsage(entries: Record<string, number>) {
 }
 
 export function WeekSection() {
-  const { weekLogs } = useStore();
+  const { weekLogs, codexUsage } = useStore();
 
   const weekActivity = buildWeekActivity(weekLogs);
   const totalCalls = weekLogs.length;
@@ -82,7 +82,13 @@ export function WeekSection() {
     if (!model || model === "unknown") continue;
     modelCounts[model] = (modelCounts[model] || 0) + 1;
   }
-  const topModels = rankUsage(modelCounts).slice(0, 3);
+  const topModels = rankUsage(modelCounts).slice(0, 10);
+  const hasReportedOpenAiUsage = [
+    codexUsage?.rate_limit?.primary_window?.used_percent,
+    codexUsage?.rate_limit?.secondary_window?.used_percent,
+  ].some((value) => typeof value === "number" && value > 0);
+  const hasRecentOpenAiLogs = weekLogs.some((log) => log.provider === "openai");
+  const showOpenAiLogWarning = hasReportedOpenAiUsage && !hasRecentOpenAiLogs;
 
   const [collapsed, setCollapsed] = useState(true);
 
@@ -177,7 +183,7 @@ export function WeekSection() {
 
           {topModels.length > 0 && (
             <div className="mt-3 text-xs text-gray-400">
-              <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top 3 models</div>
+              <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top models</div>
               <div className="mt-1 space-y-1">
                 {topModels.map(([model, count], index) => (
                   <div key={model} className="flex items-baseline justify-between gap-3">
@@ -192,6 +198,12 @@ export function WeekSection() {
                 ))}
               </div>
             </div>
+          )}
+
+          {showOpenAiLogWarning && (
+            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-800">
+              OpenAI usage was detected, but no recent OpenAI model logs were captured. OpenCode may be using an unproxied provider.
+            </p>
           )}
         </div>
       </div>

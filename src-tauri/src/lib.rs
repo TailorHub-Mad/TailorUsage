@@ -653,15 +653,16 @@ async fn forward_logs_to_dashboard() -> Result<usize, String> {
     };
     let logs_dir = home.join(".tailor-usage-proxy").join("logs");
 
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let yesterday = (chrono::Utc::now() - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
-
+    let now = chrono::Utc::now();
     let mut entries: Vec<serde_json::Value> = Vec::new();
 
-    for date in &[&yesterday, &today] {
-        let path = logs_dir.join(format!("{}.jsonl", date));
+    // Read the full 7-day rolling window (matching weekLogs on the frontend) so
+    // that older logs which were never forwarded — including error logs — are included.
+    for days_ago in 0..7i64 {
+        let date = (now - chrono::Duration::days(days_ago))
+            .format("%Y-%m-%d")
+            .to_string();
+        let path = logs_dir.join(format!("{}.jsonl", &date));
         let Ok(content) = fs::read_to_string(&path) else {
             continue;
         };
@@ -784,12 +785,9 @@ fn dirs_next() -> Option<PathBuf> {
 
 // --- Preferences ---
 
-#[derive(Serialize, Deserialize)]
-#[allow(dead_code)]
-struct Preferences {
-    poll_interval: u64,
-    tray_display: String,
-}
+const DEFAULT_POLL_INTERVAL: u64 = 900_000;
+const DEFAULT_TRAY_DISPLAY: &str = "tokens";
+const DEFAULT_TRAY_SOURCE: &str = "claude";
 
 fn preferences_path(app: &AppHandle) -> PathBuf {
     let dir = app.path().app_data_dir().expect("app data dir");
@@ -797,23 +795,88 @@ fn preferences_path(app: &AppHandle) -> PathBuf {
     dir.join("preferences.json")
 }
 
-#[tauri::command]
-fn get_preferences(app: AppHandle) -> serde_json::Value {
-    let path = preferences_path(&app);
-    fs::read_to_string(&path)
+fn normalize_preferences(value: serde_json::Value) -> serde_json::Value {
+    let poll_interval = value
+        .get("poll_interval")
+        .and_then(|v| v.as_u64())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_POLL_INTERVAL);
+
+    let tray_display = value
+        .get("tray_display")
+        .and_then(|v| v.as_str())
+        .filter(|value| matches!(*value, "cost" | "tokens"))
+        .unwrap_or(DEFAULT_TRAY_DISPLAY);
+
+    let tray_source = value
+        .get("tray_source")
+        .and_then(|v| v.as_str())
+        .filter(|value| matches!(*value, "claude" | "openai"))
+        .unwrap_or(DEFAULT_TRAY_SOURCE);
+
+    let notification_threshold = value
+        .get("notification_threshold")
+        .and_then(|v| v.as_i64())
+        .filter(|value| (0..=100).contains(value))
+        .map(serde_json::Value::from)
+        .unwrap_or(serde_json::Value::Null);
+
+    let hide_from_dock = value
+        .get("hide_from_dock")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    serde_json::json!({
+        "poll_interval": poll_interval,
+        "tray_display": tray_display,
+        "tray_source": tray_source,
+        "notification_threshold": notification_threshold,
+        "hide_from_dock": hide_from_dock,
+    })
+}
+
+fn read_preferences_json(app: &AppHandle) -> serde_json::Value {
+    let path = preferences_path(app);
+    let stored = fs::read_to_string(&path)
         .ok()
         .and_then(|d| serde_json::from_str(&d).ok())
-        .unwrap_or(serde_json::json!({
-            "poll_interval": 900000,
-            "tray_display": "tokens",
-            "tray_source": "auto"
-        }))
+        .unwrap_or(serde_json::json!({}));
+
+    normalize_preferences(stored)
+}
+
+fn merge_preferences_json(
+    current: serde_json::Value,
+    updates: serde_json::Value,
+) -> serde_json::Value {
+    let mut merged = current;
+
+    if let (Some(current_obj), Some(update_obj)) = (merged.as_object_mut(), updates.as_object()) {
+        for (key, value) in update_obj {
+            current_obj.insert(key.clone(), value.clone());
+        }
+    }
+
+    normalize_preferences(merged)
+}
+
+#[tauri::command]
+fn get_preferences(app: AppHandle) -> serde_json::Value {
+    let prefs = read_preferences_json(&app);
+
+    serde_json::json!({
+        "poll_interval": prefs["poll_interval"].clone(),
+        "tray_display": prefs["tray_display"].clone(),
+        "tray_source": prefs["tray_source"].clone(),
+        "notification_threshold": prefs["notification_threshold"].clone(),
+    })
 }
 
 #[tauri::command]
 fn set_preferences(app: AppHandle, prefs: serde_json::Value) -> Result<(), String> {
     let path = preferences_path(&app);
-    fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap()).map_err(|e| e.to_string())?;
+    let merged = merge_preferences_json(read_preferences_json(&app), prefs);
+    fs::write(&path, serde_json::to_string_pretty(&merged).unwrap()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1098,11 +1161,9 @@ fn resize_window(window: tauri::WebviewWindow, height: f64) {
 // --- Dock visibility ---
 
 fn read_hide_from_dock_pref(app: &AppHandle) -> bool {
-    let path = preferences_path(app);
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-        .and_then(|v| v["hide_from_dock"].as_bool())
+    read_preferences_json(app)
+        .get("hide_from_dock")
+        .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
 
@@ -1128,13 +1189,11 @@ fn set_hide_from_dock(
     enabled: bool,
 ) -> Result<(), String> {
     let path = preferences_path(&app);
-    let mut prefs: serde_json::Value = fs::read_to_string(&path)
-        .ok()
-        .and_then(|d| serde_json::from_str(&d).ok())
-        .unwrap_or(serde_json::json!({}));
-    prefs["hide_from_dock"] = serde_json::Value::Bool(enabled);
-    fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap())
-        .map_err(|e| e.to_string())?;
+    let prefs = merge_preferences_json(
+        read_preferences_json(&app),
+        serde_json::json!({ "hide_from_dock": enabled }),
+    );
+    fs::write(&path, serde_json::to_string_pretty(&prefs).unwrap()).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     {
         // Refresh last_shown so the blur handler's 800ms guard keeps the window visible
@@ -1344,7 +1403,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::should_cleanup_stale_proxy_config;
+    use super::{
+        merge_preferences_json, normalize_preferences, should_cleanup_stale_proxy_config,
+        DEFAULT_POLL_INTERVAL,
+    };
+    use serde_json::json;
 
     #[test]
     fn cleans_stale_proxy_config_when_proxy_is_disabled_and_not_running() {
@@ -1359,5 +1422,42 @@ mod tests {
     #[test]
     fn keeps_proxy_config_when_another_proxy_instance_is_running() {
         assert!(!should_cleanup_stale_proxy_config(false, true));
+    }
+
+    #[test]
+    fn normalizes_preferences_to_supported_defaults() {
+        let prefs = normalize_preferences(json!({
+            "poll_interval": 0,
+            "tray_display": "invalid",
+            "tray_source": "auto",
+            "notification_threshold": 101,
+        }));
+
+        assert_eq!(prefs["poll_interval"], json!(DEFAULT_POLL_INTERVAL));
+        assert_eq!(prefs["tray_display"], json!("tokens"));
+        assert_eq!(prefs["tray_source"], json!("claude"));
+        assert!(prefs["notification_threshold"].is_null());
+        assert_eq!(prefs["hide_from_dock"], json!(false));
+    }
+
+    #[test]
+    fn merging_preferences_preserves_hide_from_dock() {
+        let prefs = merge_preferences_json(
+            json!({
+                "poll_interval": 900000,
+                "tray_display": "tokens",
+                "tray_source": "claude",
+                "notification_threshold": null,
+                "hide_from_dock": true,
+            }),
+            json!({
+                "poll_interval": 300000,
+                "tray_source": "openai",
+            }),
+        );
+
+        assert_eq!(prefs["poll_interval"], json!(300000));
+        assert_eq!(prefs["tray_source"], json!("openai"));
+        assert_eq!(prefs["hide_from_dock"], json!(true));
     }
 }
