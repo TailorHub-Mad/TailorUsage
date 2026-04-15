@@ -27,6 +27,8 @@ struct AppState {
     _tray: TrayIcon,
     /// Running proxy handle
     proxy: Mutex<Option<proxy::ProxyHandle>>,
+    /// Allows explicit quit requests to pass through the ExitRequested guard.
+    is_quitting: Mutex<bool>,
 }
 
 // --- Auth persistence ---
@@ -1268,6 +1270,9 @@ pub fn run() {
                 })
                 .on_menu_event(move |_app, event| {
                     if event.id() == "quit" {
+                        if let Some(state) = quit_handle.try_state::<AppState>() {
+                            *state.is_quitting.lock().unwrap() = true;
+                        }
                         quit_handle.exit(0);
                     }
                 })
@@ -1304,6 +1309,7 @@ pub fn run() {
                 last_shown: Mutex::new(None::<Instant>),
                 _tray: tray,
                 proxy: Mutex::new(proxy_handle),
+                is_quitting: Mutex::new(false),
             });
 
             // Create the hidden popover window
@@ -1382,7 +1388,14 @@ pub fn run() {
             match event {
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     // Keep the process (and tray icon) alive when all windows are hidden
-                    api.prevent_exit();
+                    let should_prevent_exit = app_handle
+                        .try_state::<AppState>()
+                        .map(|state| !*state.is_quitting.lock().unwrap())
+                        .unwrap_or(true);
+
+                    if should_prevent_exit {
+                        api.prevent_exit();
+                    }
                 }
                 tauri::RunEvent::Exit => {
                     // Gracefully stop proxy on app exit
