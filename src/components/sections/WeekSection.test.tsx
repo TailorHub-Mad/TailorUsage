@@ -356,7 +356,8 @@ describe("WeekSection", () => {
     expect(summaryText).toContain("3.o33 calls");
     expect(summaryText.indexOf("1.claude-sonnet-4")).toBeLessThan(summaryText.indexOf("2.gpt-4.1"));
     expect(summaryText.indexOf("2.gpt-4.1")).toBeLessThan(summaryText.indexOf("3.o3"));
-    expect(summaryText).toContain("4.claude-haiku-32 calls");
+    expect(summaryText).not.toContain("4.claude-haiku-32 calls");
+    expect(screen.queryByText("claude-haiku-3")).not.toBeInTheDocument();
   });
 
   it("shows a warning when OpenAI usage exists without recent OpenAI logs", () => {

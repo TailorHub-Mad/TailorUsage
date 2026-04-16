@@ -3,7 +3,6 @@ import {
   setPreferences as savePreferences,
   setLaunchAtLogin as saveLaunchAtLogin,
   setHideFromDock as saveHideFromDock,
-  openLogsFolder,
 } from "../lib/api";
 import type { Preferences } from "../lib/types";
 
@@ -127,16 +126,6 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-        </div>
-
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">Debug logs</p>
-          <button
-            onClick={() => openLogsFolder().catch(() => {})}
-            className="text-xs font-medium text-gray-500 underline decoration-gray-300 underline-offset-2 transition-colors hover:text-gray-700 cursor-pointer"
-          >
-            Open Logs
-          </button>
         </div>
       </div>
     </div>

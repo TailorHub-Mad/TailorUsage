@@ -82,7 +82,7 @@ export function WeekSection() {
     if (!model || model === "unknown") continue;
     modelCounts[model] = (modelCounts[model] || 0) + 1;
   }
-  const topModels = rankUsage(modelCounts).slice(0, 10);
+  const topModels = rankUsage(modelCounts).slice(0, 3);
   const hasReportedOpenAiUsage = [
     codexUsage?.rate_limit?.primary_window?.used_percent,
     codexUsage?.rate_limit?.secondary_window?.used_percent,
