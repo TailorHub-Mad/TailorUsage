@@ -79,7 +79,7 @@ jobs:
         run: |
           VERSION="${{ github.event.inputs.version }}"
           APP_NAME="TailorUsage"
-          DMG_PATH="src-tauri/target/release/bundle/dmg/${APP_NAME}_${VERSION}_aarch64.dmg"
+          DMG_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/${APP_NAME}_${VERSION}_aarch64.dmg"
           TMP_APP="/tmp/${APP_NAME}.app"
 
           CERT_HASH=$(security find-identity -v -p codesigning \
