@@ -6,6 +6,7 @@ import {
   fetchMetrics,
   fetchUsage,
   readLocalLogs,
+  readCodexLogs,
   getProxyEnabled,
   setTrayTitle,
   forwardLogsToDashboard,
@@ -249,7 +250,7 @@ export function usePolling() {
         setLoading(true);
         setError(null);
 
-        const [metricsRes, weekRes, claudeUsageResult, codexUsageResult, localWeekRaw, proxyEnabled] =
+        const [metricsRes, weekRes, claudeUsageResult, codexUsageResult, localWeekRaw, codexLogsRaw, proxyEnabled] =
           await Promise.all([
             cookie
               ? fetchMetricsWithRetry(cookie).catch((e: unknown) => {
@@ -267,6 +268,7 @@ export function usePolling() {
               .then((data) => ({ data, error: null }))
               .catch((error: unknown) => ({ data: null, error })),
             Promise.all(currentWeekDateStrings().map((date) => readLocalLogs(date).catch(() => []))),
+            readCodexLogs(weekStartStr(), todayStr()).catch(() => []),
             getProxyEnabled().catch(() => null),
           ]);
 
@@ -287,7 +289,10 @@ export function usePolling() {
           checkAndNotify(claudeUsageData, codexUsageData, notification_threshold, notifiedRef.current);
         }
 
-        const normalizedLocalWeekLogs = normalizeLogRecords(localWeekRaw.flat());
+        const normalizedLocalWeekLogs = normalizeLogRecords([
+          ...localWeekRaw.flat(),
+          ...(codexLogsRaw as Record<string, unknown>[]),
+        ]);
 
         const localWeekDeveloperId = preferredDeveloperId(normalizedLocalWeekLogs);
         if (isKnownDeveloperId(localWeekDeveloperId) || !myIdRef.current) {

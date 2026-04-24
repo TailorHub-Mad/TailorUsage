@@ -47,6 +47,13 @@ export async function readLocalLogs(date: string): Promise<Record<string, unknow
   return invoke("read_local_logs", { date });
 }
 
+export async function readCodexLogs(
+  startDate: string,
+  endDate: string,
+): Promise<Record<string, unknown>[]> {
+  return invoke("read_codex_logs", { startDate, endDate });
+}
+
 export async function setTrayTitle(title: string): Promise<void> {
   return invoke("set_tray_title", { title });
 }

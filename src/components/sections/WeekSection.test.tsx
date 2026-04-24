@@ -360,6 +360,83 @@ describe("WeekSection", () => {
     expect(screen.queryByText("claude-haiku-3")).not.toBeInTheDocument();
   });
 
+  it("keeps the top OpenAI model visible when Claude models dominate counts", () => {
+    useStore.setState({
+      weekLogs: [
+        ...Array.from({ length: 6 }, (_, index) => ({
+          ts: `2026-03-18T11:${`${index}`.padStart(2, "0")}:00.000Z`,
+          request_id: `req-model-claude-a-${index}`,
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "anthropic" as const,
+          endpoint: "/v1/messages",
+          model: "claude-sonnet-4",
+          stream: false,
+          status: 200,
+          latency_ms: 120,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        })),
+        ...Array.from({ length: 4 }, (_, index) => ({
+          ts: `2026-03-19T11:0${index}:00.000Z`,
+          request_id: `req-model-claude-b-${index}`,
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "anthropic" as const,
+          endpoint: "/v1/messages",
+          model: "claude-haiku-3",
+          stream: false,
+          status: 200,
+          latency_ms: 120,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        })),
+        ...Array.from({ length: 3 }, (_, index) => ({
+          ts: `2026-03-20T11:0${index}:00.000Z`,
+          request_id: `req-model-claude-c-${index}`,
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "anthropic" as const,
+          endpoint: "/v1/messages",
+          model: "claude-opus-4",
+          stream: false,
+          status: 200,
+          latency_ms: 120,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        })),
+        {
+          ts: "2026-03-20T12:00:00.000Z",
+          request_id: "req-model-openai-a",
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "openai",
+          endpoint: "codex://threads",
+          model: "gpt-5.5",
+          stream: true,
+          status: 200,
+          latency_ms: 0,
+          input_tokens: 100,
+          output_tokens: 0,
+          stop_reason: "",
+        },
+      ],
+    });
+
+    render(<WeekSection />);
+
+    const modelSummary = screen.getByText("Top models").parentElement;
+    const summaryText = modelSummary?.textContent ?? "";
+
+    expect(summaryText).toContain("1.claude-sonnet-46 calls");
+    expect(summaryText).toContain("2.claude-haiku-34 calls");
+    expect(summaryText).toContain("3.gpt-5.51 call");
+    expect(screen.queryByText("claude-opus-4")).not.toBeInTheDocument();
+  });
+
   it("shows a warning when OpenAI usage exists without recent OpenAI logs", () => {
     useStore.setState({
       codexUsage: {

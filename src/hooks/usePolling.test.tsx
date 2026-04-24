@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   fetchMetrics: vi.fn(),
   fetchUsage: vi.fn(),
   readLocalLogs: vi.fn(),
+  readCodexLogs: vi.fn(),
   getProxyEnabled: vi.fn(),
   setTrayTitle: vi.fn(),
   forwardLogsToDashboard: vi.fn(),
@@ -53,6 +54,7 @@ describe("usePolling", () => {
     resetStore();
     vi.clearAllMocks();
     apiMocks.forwardLogsToDashboard.mockResolvedValue(0);
+    apiMocks.readCodexLogs.mockResolvedValue([]);
   });
 
   it("hydrates dashboard state from local logs and API data", async () => {
@@ -136,6 +138,58 @@ describe("usePolling", () => {
     });
     expect(apiMocks.setTrayTitle).toHaveBeenCalledWith("$0.01");
     expect(useStore.getState().error).toBeNull();
+  });
+
+  it("merges Codex thread models from local Codex state into week logs", async () => {
+    const today = isoDate(0);
+
+    apiMocks.readLocalLogs.mockImplementation(async (date: string) => {
+      if (date === today) {
+        return [
+          {
+            ts: `${today}T10:00:00.000Z`,
+            request_id: "local-claude-1",
+            developer_id: "dev-a",
+            repo: "tailor-usage",
+            model: "claude-sonnet-4",
+            input_tokens: 100,
+            output_tokens: 50,
+          },
+        ];
+      }
+
+      return [];
+    });
+    apiMocks.readCodexLogs.mockResolvedValue([
+      {
+        ts: `${today}T11:00:00.000Z`,
+        request_id: "codex-thread-1",
+        developer_id: "dev-a",
+        repo: "tailor-usage",
+        provider: "openai",
+        endpoint: "codex://threads",
+        model: "gpt-5.5",
+        status: 200,
+        latency_ms: 0,
+        input_tokens: 12345,
+        output_tokens: 0,
+        stop_reason: "",
+      },
+    ]);
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue(null);
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(true);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().weekLogs.map((log) => log.model)).toContain("gpt-5.5");
+    });
+
+    expect(useStore.getState().weekLogs).toHaveLength(2);
+    expect(apiMocks.readCodexLogs).toHaveBeenCalledWith(expect.any(String), today);
   });
 
   it("shows daily usage percent in the tray when token display is selected", async () => {

@@ -60,6 +60,24 @@ function rankUsage(entries: Record<string, number>) {
   );
 }
 
+function topModelsWithOpenAiSignal(
+  rankedModels: [string, number][],
+  rankedOpenAiModels: [string, number][],
+) {
+  const topModels = rankedModels.slice(0, 3);
+  const topOpenAiModel = rankedOpenAiModels[0];
+
+  if (!topOpenAiModel || topModels.some(([model]) => model === topOpenAiModel[0])) {
+    return topModels;
+  }
+
+  if (topModels.length < 3) {
+    return [...topModels, topOpenAiModel];
+  }
+
+  return [...topModels.slice(0, 2), topOpenAiModel];
+}
+
 export function WeekSection() {
   const { weekLogs, codexUsage } = useStore();
 
@@ -77,12 +95,16 @@ export function WeekSection() {
   const topRepos = (knownRankedRepos.length > 0 ? knownRankedRepos : rankedRepos).slice(0, 3);
 
   const modelCounts: Record<string, number> = {};
+  const openAiModelCounts: Record<string, number> = {};
   for (const log of weekLogs) {
     const model = log.model?.trim();
     if (!model || model === "unknown") continue;
     modelCounts[model] = (modelCounts[model] || 0) + 1;
+    if (log.provider === "openai") {
+      openAiModelCounts[model] = (openAiModelCounts[model] || 0) + 1;
+    }
   }
-  const topModels = rankUsage(modelCounts).slice(0, 3);
+  const topModels = topModelsWithOpenAiSignal(rankUsage(modelCounts), rankUsage(openAiModelCounts));
   const hasReportedOpenAiUsage = [
     codexUsage?.rate_limit?.primary_window?.used_percent,
     codexUsage?.rate_limit?.secondary_window?.used_percent,

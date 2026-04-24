@@ -131,6 +131,15 @@ struct CodexRefreshResponse {
     id_token: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct CodexThreadRow {
+    id: String,
+    model: String,
+    tokens_used: Option<u64>,
+    cwd: Option<String>,
+    ts: Option<u64>,
+}
+
 fn claude_credentials_path() -> Result<PathBuf, String> {
     let home = dirs_next().ok_or_else(|| "HOME not set".to_string())?;
     Ok(home.join(".claude").join(".credentials.json"))
@@ -683,6 +692,18 @@ async fn forward_logs_to_dashboard() -> Result<usize, String> {
         }
     }
 
+    let today = chrono::Local::now().date_naive();
+    let week_start = today - chrono::Duration::days(6);
+    for entry in read_codex_logs(
+        week_start.format("%Y-%m-%d").to_string(),
+        today.format("%Y-%m-%d").to_string(),
+    ) {
+        let entry_ts = entry.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+        if entry_ts > last_ts {
+            entries.push(entry);
+        }
+    }
+
     if entries.is_empty() {
         return Ok(0);
     }
@@ -728,6 +749,116 @@ fn read_local_logs(date: String) -> Vec<serde_json::Value> {
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+fn codex_state_path() -> Option<PathBuf> {
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        let path = PathBuf::from(codex_home).join("state_5.sqlite");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    let home = dirs_next()?;
+    [
+        home.join(".codex").join("state_5.sqlite"),
+        home.join(".config").join("codex").join("state_5.sqlite"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+fn parse_local_date_start_ms(date: &str) -> Option<i64> {
+    let date = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    let datetime = date.and_hms_opt(0, 0, 0)?;
+    datetime
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .map(|value| value.timestamp_millis())
+}
+
+fn repo_name_from_cwd(cwd: Option<&str>) -> String {
+    cwd.and_then(|value| {
+        PathBuf::from(value)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+    })
+    .filter(|value| !value.trim().is_empty())
+    .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[tauri::command]
+fn read_codex_logs(start_date: String, end_date: String) -> Vec<serde_json::Value> {
+    let Some(path) = codex_state_path() else {
+        return vec![];
+    };
+    let Some(start_ms) = parse_local_date_start_ms(&start_date) else {
+        return vec![];
+    };
+    let Some(end_start_ms) = parse_local_date_start_ms(&end_date) else {
+        return vec![];
+    };
+    let end_ms = end_start_ms + chrono::Duration::days(1).num_milliseconds();
+
+    let query = format!(
+        r#"
+        select id,
+               coalesce(model, '') as model,
+               tokens_used,
+               cwd,
+               coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) as ts
+        from threads
+        where archived = 0
+          and coalesce(model, '') <> ''
+          and coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) >= {}
+          and coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) < {}
+        order by ts asc
+        "#,
+        start_ms, end_ms
+    );
+
+    let Ok(output) = Command::new("sqlite3")
+        .arg("-readonly")
+        .arg(path)
+        .arg("-json")
+        .arg(query)
+        .output()
+    else {
+        return vec![];
+    };
+
+    if !output.status.success() {
+        return vec![];
+    }
+
+    let Ok(rows) = serde_json::from_slice::<Vec<CodexThreadRow>>(&output.stdout) else {
+        return vec![];
+    };
+
+    let developer_id = proxy::logger::get_developer_id();
+    rows.into_iter()
+        .filter_map(|row| {
+            let ts = row.ts?;
+            Some(serde_json::json!({
+                "ts": ts,
+                "request_id": format!("codex-thread-{}", row.id),
+                "developer_id": developer_id,
+                "repo": repo_name_from_cwd(row.cwd.as_deref()),
+                "repo_source": "codex_state",
+                "repo_cwd": row.cwd,
+                "provider": "openai",
+                "endpoint": "codex://threads",
+                "model": row.model,
+                "stream": true,
+                "status": 200,
+                "latency_ms": 0,
+                "input_tokens": row.tokens_used.unwrap_or(0),
+                "output_tokens": 0,
+                "stop_reason": "",
+            }))
+        })
         .collect()
 }
 
@@ -1362,6 +1493,7 @@ pub fn run() {
             fetch_claude_usage,
             fetch_codex_usage,
             read_local_logs,
+            read_codex_logs,
             open_logs_folder,
             set_tray_title,
             send_notification,
