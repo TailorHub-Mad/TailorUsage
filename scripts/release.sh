@@ -66,10 +66,17 @@ fi
 # ── Extract .app from DMG ─────────────────────────────────────────────────────
 echo "▶ Extracting .app from DMG..."
 rm -rf "$TMP_APP"
-MOUNT_OUTPUT=$(hdiutil attach "$DMG_PATH" -readonly -nobrowse 2>&1)
-MOUNT_POINT=$(echo "$MOUNT_OUTPUT" | awk '/Apple_HFS/ {for(i=3;i<=NF;i++) printf $i" "; print ""}' | xargs)
-cp -R "${MOUNT_POINT}/${APP_NAME}.app" "$TMP_APP"
-hdiutil detach "$MOUNT_POINT" -quiet
+MOUNT_DIR=$(mktemp -d "/tmp/${APP_NAME}.dmg.XXXXXX")
+cleanup_mount() {
+  hdiutil detach "$MOUNT_DIR" -quiet >/dev/null 2>&1 || true
+  rm -rf "$MOUNT_DIR"
+}
+trap cleanup_mount EXIT
+hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$MOUNT_DIR" >/dev/null
+cp -R "${MOUNT_DIR}/${APP_NAME}.app" "$TMP_APP"
+hdiutil detach "$MOUNT_DIR" -quiet
+rm -rf "$MOUNT_DIR"
+trap - EXIT
 
 # ── Sign .app ─────────────────────────────────────────────────────────────────
 echo "▶ Signing .app..."

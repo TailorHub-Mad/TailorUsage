@@ -81,17 +81,38 @@ jobs:
           APP_NAME="TailorUsage"
           DMG_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/${APP_NAME}_${VERSION}_aarch64.dmg"
           TMP_APP="/tmp/${APP_NAME}.app"
+          MOUNT_DIR="$(mktemp -d "$RUNNER_TEMP/${APP_NAME}.dmg.XXXXXX")"
+
+          cleanup_mount() {
+            hdiutil detach "$MOUNT_DIR" -quiet >/dev/null 2>&1 || true
+            rm -rf "$MOUNT_DIR"
+          }
+          trap cleanup_mount EXIT
 
           CERT_HASH=$(security find-identity -v -p codesigning \
             | grep -F "$APPLE_SIGNING_IDENTITY" \
             | head -1 \
             | awk '{print $2}')
 
+          if [ -z "$CERT_HASH" ]; then
+            echo "No codesigning identity matched APPLE_SIGNING_IDENTITY."
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+
+          if [ ! -f "$DMG_PATH" ]; then
+            echo "DMG not found at $DMG_PATH"
+            find src-tauri/target -path '*bundle/dmg/*.dmg' -print
+            exit 1
+          fi
+
           echo "▶ Extracting .app from DMG..."
-          MOUNT_OUTPUT=$(hdiutil attach "$DMG_PATH" -readonly -nobrowse 2>&1)
-          MOUNT_POINT=$(echo "$MOUNT_OUTPUT" | awk '/Apple_HFS/ {for(i=3;i<=NF;i++) printf $i" "; print ""}' | xargs)
-          cp -R "${MOUNT_POINT}/${APP_NAME}.app" "$TMP_APP"
-          hdiutil detach "$MOUNT_POINT" -quiet
+          rm -rf "$TMP_APP"
+          hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$MOUNT_DIR" >/dev/null
+          cp -R "${MOUNT_DIR}/${APP_NAME}.app" "$TMP_APP"
+          hdiutil detach "$MOUNT_DIR" -quiet
+          rm -rf "$MOUNT_DIR"
+          trap - EXIT
 
           echo "▶ Signing .app..."
           codesign --force --deep --options runtime --timestamp \
