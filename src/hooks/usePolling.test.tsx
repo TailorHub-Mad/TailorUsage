@@ -11,6 +11,7 @@ const apiMocks = vi.hoisted(() => ({
   readLocalLogs: vi.fn(),
   readCodexLogs: vi.fn(),
   getProxyEnabled: vi.fn(),
+  verifyProxyConfig: vi.fn(),
   setTrayTitle: vi.fn(),
   forwardLogsToDashboard: vi.fn(),
 }));
@@ -26,6 +27,8 @@ function resetStore() {
     claudeUsageError: null,
     codexUsage: null,
     codexUsageError: null,
+    codexReadStatus: { status: "ok", detail: null },
+    openAiLogDiagnostic: null,
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
@@ -54,7 +57,8 @@ describe("usePolling", () => {
     resetStore();
     vi.clearAllMocks();
     apiMocks.forwardLogsToDashboard.mockResolvedValue(0);
-    apiMocks.readCodexLogs.mockResolvedValue([]);
+    apiMocks.readCodexLogs.mockResolvedValue({ status: "ok", detail: null, logs: [] });
+    apiMocks.verifyProxyConfig.mockResolvedValue({ ok: true, failures: [] });
   });
 
   it("hydrates dashboard state from local logs and API data", async () => {
@@ -160,22 +164,26 @@ describe("usePolling", () => {
 
       return [];
     });
-    apiMocks.readCodexLogs.mockResolvedValue([
-      {
-        ts: `${today}T11:00:00.000Z`,
-        request_id: "codex-thread-1",
-        developer_id: "dev-a",
-        repo: "tailor-usage",
-        provider: "openai",
-        endpoint: "codex://threads",
-        model: "gpt-5.5",
-        status: 200,
-        latency_ms: 0,
-        input_tokens: 12345,
-        output_tokens: 0,
-        stop_reason: "",
-      },
-    ]);
+    apiMocks.readCodexLogs.mockResolvedValue({
+      status: "ok",
+      detail: null,
+      logs: [
+        {
+          ts: `${today}T11:00:00.000Z`,
+          request_id: "codex-thread-1",
+          developer_id: "dev-a",
+          repo: "tailor-usage",
+          provider: "openai",
+          endpoint: "codex://threads",
+          model: "gpt-5.5",
+          status: 200,
+          latency_ms: 0,
+          input_tokens: 12345,
+          output_tokens: 0,
+          stop_reason: "",
+        },
+      ],
+    });
     apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
     apiMocks.fetchClaudeUsage.mockResolvedValue(null);
     apiMocks.fetchCodexUsage.mockResolvedValue(null);
@@ -189,7 +197,37 @@ describe("usePolling", () => {
     });
 
     expect(useStore.getState().weekLogs).toHaveLength(2);
+    expect(useStore.getState().codexReadStatus).toEqual({ status: "ok", detail: null });
     expect(apiMocks.readCodexLogs).toHaveBeenCalledWith(expect.any(String), today);
+  });
+
+  it("surfaces Codex reader status from the polling payload", async () => {
+    apiMocks.readLocalLogs.mockResolvedValue([]);
+    apiMocks.readCodexLogs.mockResolvedValue({
+      status: "db-locked",
+      detail: "database is locked",
+      logs: [],
+    });
+    apiMocks.fetchClaudeUsage.mockResolvedValue(null);
+    apiMocks.fetchCodexUsage.mockResolvedValue({
+      rate_limit: {
+        primary_window: { used_percent: 12, reset_at: 1774556460, limit_window_seconds: 18000 },
+      },
+    });
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(true);
+
+    renderHook(() => usePolling());
+
+    await waitFor(() => {
+      expect(useStore.getState().codexReadStatus).toEqual({
+        status: "db-locked",
+        detail: "database is locked",
+      });
+    });
+
+    expect(useStore.getState().openAiLogDiagnostic?.kind).toBe("codex_read_status");
   });
 
   it("shows daily usage percent in the tray when token display is selected", async () => {

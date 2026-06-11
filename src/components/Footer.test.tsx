@@ -19,6 +19,8 @@ function resetStore() {
     claudeUsageError: null,
     codexUsage: null,
     codexUsageError: null,
+    codexReadStatus: { status: "ok", detail: null },
+    openAiLogDiagnostic: null,
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },

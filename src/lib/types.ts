@@ -22,9 +22,24 @@ export interface DeveloperMetrics {
   developer_id: string;
   total_tokens_1h: number;
   opus_tokens_1h: number;
+  anthropic_tokens_1h?: number;
+  openai_tokens_1h?: number;
   opus_streak: number;
   last_updated: string;
   warning_flag: boolean;
+}
+
+export type CodexReadStatus =
+  | "ok"
+  | "db-missing"
+  | "db-locked"
+  | "schema-mismatch"
+  | "query-error";
+
+export interface CodexLogsResult {
+  status: CodexReadStatus;
+  detail?: string | null;
+  logs: Record<string, unknown>[];
 }
 
 export interface ClaudeUsageWindow {
@@ -75,6 +90,16 @@ export interface CodexUsage {
 export interface ProxyStatus {
   running: boolean;
   enabled: boolean;
+}
+
+export interface ProxyConfigVerification {
+  ok: boolean;
+  failures: string[];
+}
+
+export interface OpenAiLogDiagnostic {
+  kind: "bypass_suspected" | "codex_read_status" | "no_local_activity";
+  message: string;
 }
 
 export interface Preferences {

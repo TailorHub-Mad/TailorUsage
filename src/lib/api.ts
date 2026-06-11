@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ClaudeUsage, CodexUsage, Preferences } from "./types";
+import type { ClaudeUsage, CodexLogsResult, CodexUsage, Preferences, ProxyConfigVerification } from "./types";
 
 export async function getAuthCookie(): Promise<string | null> {
   return invoke<string | null>("get_auth_cookie");
@@ -50,7 +50,7 @@ export async function readLocalLogs(date: string): Promise<Record<string, unknow
 export async function readCodexLogs(
   startDate: string,
   endDate: string,
-): Promise<Record<string, unknown>[]> {
+): Promise<CodexLogsResult> {
   return invoke("read_codex_logs", { startDate, endDate });
 }
 
@@ -80,6 +80,10 @@ export async function stopProxy(): Promise<void> {
 
 export async function getProxyEnabled(): Promise<boolean> {
   return invoke("get_proxy_enabled");
+}
+
+export async function verifyProxyConfig(): Promise<ProxyConfigVerification> {
+  return invoke("verify_proxy_config");
 }
 
 export async function getAppVersion(): Promise<string> {

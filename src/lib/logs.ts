@@ -66,6 +66,25 @@ function normalizeProvider(raw: unknown): LogRecord["provider"] {
   return undefined;
 }
 
+// Fallback-only: records written by current TailorUsage versions carry an
+// explicit `provider` stamped at capture time; this classifies legacy JSONL
+// lines that predate the field. Keep in sync with the Rust predicate in
+// src-tauri/src/proxy/config_writer.rs (shared fixtures in logs.test.ts).
+export function modelNameLooksOpenAi(model: string): boolean {
+  const value = model.trim().toLowerCase();
+  return (
+    value.startsWith("gpt") ||
+    /^o\d/.test(value) ||
+    value.includes("codex") ||
+    value.startsWith("ft:") ||
+    value.startsWith("davinci") ||
+    value.startsWith("curie") ||
+    value.startsWith("text-embedding-") ||
+    value.startsWith("text-moderation-") ||
+    value.startsWith("omni-moderation-")
+  );
+}
+
 function inferProvider(endpoint: string, model: string): LogRecord["provider"] {
   const endpointValue = endpoint.toLowerCase();
   const modelValue = model.toLowerCase();
@@ -75,12 +94,12 @@ function inferProvider(endpoint: string, model: string): LogRecord["provider"] {
   }
 
   if (
+    endpointValue.startsWith("codex://") ||
     endpointValue.includes("/responses") ||
     endpointValue.includes("/chat/completions") ||
     endpointValue.includes("/completions") ||
     endpointValue.includes("/models") ||
-    modelValue.includes("gpt") ||
-    /^o\d/.test(modelValue)
+    modelNameLooksOpenAi(modelValue)
   ) {
     return "openai";
   }

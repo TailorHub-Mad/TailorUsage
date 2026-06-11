@@ -8,6 +8,7 @@ import {
   readLocalLogs,
   readCodexLogs,
   getProxyEnabled,
+  verifyProxyConfig,
   setTrayTitle,
   forwardLogsToDashboard,
   sendNotification,
@@ -16,7 +17,7 @@ import { calculateCost } from "../lib/cost";
 import { formatCost } from "../lib/format";
 import { DAILY_LIMIT, formatResetTime, formatUsagePercent, totalTokens } from "../lib/usage";
 import { normalizeLogRecords } from "../lib/logs";
-import type { LogRecord, DeveloperMetrics, ClaudeUsage, CodexUsage } from "../lib/types";
+import type { LogRecord, DeveloperMetrics, ClaudeUsage, CodexLogsResult, CodexUsage, OpenAiLogDiagnostic } from "../lib/types";
 
 type NotificationKey = "claude_session" | "claude_weekly" | "openai_session" | "openai_weekly";
 
@@ -60,6 +61,10 @@ function parseRetryAfterTimestamp(error: unknown): number | null {
 
 function rawErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function emptyCodexLogsResult(status: CodexLogsResult["status"], detail: string | null): CodexLogsResult {
+  return { status, detail, logs: [] };
 }
 
 function isProviderLoginRequiredError(provider: "claude" | "openai", error: unknown): boolean {
@@ -113,6 +118,16 @@ function formatTrayTitle(
   }
 
   return formatUsagePercent(totalTokens(logs), DAILY_LIMIT);
+}
+
+function openAiUsageSignal(codexUsage: CodexUsage | null): number | null {
+  const values = [
+    codexUsage?.rate_limit?.primary_window?.used_percent,
+    codexUsage?.rate_limit?.secondary_window?.used_percent,
+  ].filter((value): value is number => typeof value === "number");
+
+  if (values.length === 0) return null;
+  return Math.max(...values);
 }
 
 function mergeLogs(primary: LogRecord[], secondary: LogRecord[]): LogRecord[] {
@@ -199,6 +214,8 @@ export function usePolling() {
     setClaudeUsageError,
     setCodexUsage,
     setCodexUsageError,
+    setCodexReadStatus,
+    setOpenAiLogDiagnostic,
     setTodayLogs,
     setWeekLogs,
     setProxyStatus,
@@ -213,6 +230,8 @@ export function usePolling() {
   const myIdRef = useRef<string | null>(null);
   // Tracks which usage windows have already triggered a notification (cleared when usage drops below threshold)
   const notifiedRef = useRef<Set<NotificationKey>>(new Set());
+  const previousOpenAiUsageRef = useRef<number | null>(null);
+  const previousLocalOpenAiLogCountRef = useRef<number>(0);
 
   useEffect(() => {
     // Fast poll: read today's logs directly from the local proxy JSONL file
@@ -250,7 +269,7 @@ export function usePolling() {
         setLoading(true);
         setError(null);
 
-        const [metricsRes, weekRes, claudeUsageResult, codexUsageResult, localWeekRaw, codexLogsRaw, proxyEnabled] =
+        const [metricsRes, weekRes, claudeUsageResult, codexUsageResult, localWeekRaw, codexLogsResult, proxyEnabled] =
           await Promise.all([
             cookie
               ? fetchMetricsWithRetry(cookie).catch((e: unknown) => {
@@ -268,7 +287,9 @@ export function usePolling() {
               .then((data) => ({ data, error: null }))
               .catch((error: unknown) => ({ data: null, error })),
             Promise.all(currentWeekDateStrings().map((date) => readLocalLogs(date).catch(() => []))),
-            readCodexLogs(weekStartStr(), todayStr()).catch(() => []),
+            readCodexLogs(weekStartStr(), todayStr()).catch((error: unknown) =>
+              emptyCodexLogsResult("query-error", rawErrorMessage(error)),
+            ),
             getProxyEnabled().catch(() => null),
           ]);
 
@@ -283,6 +304,10 @@ export function usePolling() {
         setCodexUsageError(
           codexUsageResult.error ? formatProviderUsageError("openai", codexUsageResult.error) : null,
         );
+        setCodexReadStatus({
+          status: codexLogsResult.status,
+          detail: codexLogsResult.detail ?? null,
+        });
 
         const { notification_threshold } = preferences;
         if (typeof notification_threshold === "number") {
@@ -291,8 +316,44 @@ export function usePolling() {
 
         const normalizedLocalWeekLogs = normalizeLogRecords([
           ...localWeekRaw.flat(),
-          ...(codexLogsRaw as Record<string, unknown>[]),
+          ...codexLogsResult.logs,
         ]);
+        const localOpenAiLogCount = normalizedLocalWeekLogs.filter((log) => log.provider === "openai").length;
+        const openAiUsage = openAiUsageSignal(codexUsageData);
+        const usageIncreased =
+          typeof openAiUsage === "number" &&
+          previousOpenAiUsageRef.current !== null &&
+          openAiUsage > previousOpenAiUsageRef.current;
+        const noNewLocalOpenAiLogs = localOpenAiLogCount <= previousLocalOpenAiLogCountRef.current;
+
+        let openAiLogDiagnostic: OpenAiLogDiagnostic | null = null;
+        if (typeof openAiUsage === "number" && openAiUsage > 0 && localOpenAiLogCount === 0) {
+          if (codexLogsResult.status !== "ok") {
+            openAiLogDiagnostic = {
+              kind: "codex_read_status",
+              message: `OpenAI usage was detected, but Codex history is currently unreadable (${codexLogsResult.status}).`,
+            };
+          } else {
+            openAiLogDiagnostic = {
+              kind: "no_local_activity",
+              message: "OpenAI usage was detected, but no local OpenAI model activity was captured in this window.",
+            };
+          }
+        }
+
+        if (usageIncreased && noNewLocalOpenAiLogs) {
+          const verification = await verifyProxyConfig().catch(() => null);
+          const detail = verification?.failures.length
+            ? `Proxy bypass suspected: ${verification.failures.join("; ")}`
+            : "Local proxy configuration currently verifies; this may be activity from another machine or an unobserved client.";
+          openAiLogDiagnostic = {
+            kind: "bypass_suspected",
+            message: `OpenAI usage increased, but no new local OpenAI model logs were captured. ${detail}`,
+          };
+        }
+        setOpenAiLogDiagnostic(openAiLogDiagnostic);
+        previousOpenAiUsageRef.current = openAiUsage;
+        previousLocalOpenAiLogCountRef.current = localOpenAiLogCount;
 
         const localWeekDeveloperId = preferredDeveloperId(normalizedLocalWeekLogs);
         if (isKnownDeveloperId(localWeekDeveloperId) || !myIdRef.current) {
@@ -382,6 +443,8 @@ export function usePolling() {
     setClaudeUsageError,
     setCodexUsage,
     setCodexUsageError,
+    setCodexReadStatus,
+    setOpenAiLogDiagnostic,
     setTodayLogs,
     setWeekLogs,
     setProxyStatus,

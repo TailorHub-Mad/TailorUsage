@@ -1,3 +1,4 @@
+use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
 
@@ -306,11 +307,16 @@ fn string_at_path<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<&'a
 
 fn model_name_looks_openai(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
-    model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
+    model.starts_with("gpt")
+        || model
+            .strip_prefix('o')
+            .and_then(|rest| rest.chars().next())
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
         || model.contains("codex")
+        || model.starts_with("ft:")
+        || model.starts_with("davinci")
+        || model.starts_with("curie")
         || model.starts_with("text-embedding-")
         || model.starts_with("text-moderation-")
         || model.starts_with("omni-moderation-")
@@ -324,7 +330,7 @@ fn base_url_looks_openai(url: &str) -> bool {
 }
 
 fn provider_looks_openai_compatible(name: &str, value: &serde_json::Value) -> bool {
-    if name.eq_ignore_ascii_case("openai") {
+    if name.eq_ignore_ascii_case("openai") || name.eq_ignore_ascii_case("openrouter") {
         return true;
     }
 
@@ -360,6 +366,101 @@ fn provider_looks_openai_compatible(name: &str, value: &serde_json::Value) -> bo
             })
         })
         .unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProxyConfigVerification {
+    pub ok: bool,
+    pub failures: Vec<String>,
+}
+
+fn file_contains(path: &PathBuf, needle: &str) -> bool {
+    fs::read_to_string(path)
+        .map(|content| content.contains(needle))
+        .unwrap_or(false)
+}
+
+fn provider_base_url<'a>(
+    provider: &'a serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Option<&'a str> {
+    provider
+        .get(name)
+        .and_then(|value| string_at_path(value, &["options", "baseURL"]))
+}
+
+pub fn verify_proxy_config(_anthropic_port: u16, openai_port: u16) -> ProxyConfigVerification {
+    let Some(home) = home_dir() else {
+        return ProxyConfigVerification {
+            ok: false,
+            failures: vec!["HOME is not available".to_string()],
+        };
+    };
+
+    let expected_shell_openai = format!("OPENAI_BASE_URL=\"http://127.0.0.1:{}/v1\"", openai_port);
+    let shell_profiles = [
+        home.join(".zshenv"),
+        home.join(".zshrc"),
+        home.join(".bashrc"),
+    ];
+    let mut failures = Vec::new();
+
+    if !shell_profiles
+        .iter()
+        .any(|path| path.exists() && file_contains(path, &expected_shell_openai))
+    {
+        failures.push(format!(
+            "shell profiles missing OPENAI_BASE_URL=http://127.0.0.1:{}/v1",
+            openai_port
+        ));
+    }
+
+    let opencode_config = home.join(".config").join("opencode").join("opencode.json");
+    if opencode_config.exists() {
+        match fs::read_to_string(&opencode_config)
+            .ok()
+            .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        {
+            Some(config) => {
+                if let Some(provider) = config.get("provider").and_then(|p| p.as_object()) {
+                    let expected_openai = format!("http://127.0.0.1:{}/v1", openai_port);
+                    for (name, value) in provider {
+                        if !provider_looks_openai_compatible(name, value) {
+                            continue;
+                        }
+
+                        if provider_base_url(provider, name) != Some(expected_openai.as_str()) {
+                            failures.push(format!(
+                                "opencode provider `{}` is not routed to {}",
+                                name, expected_openai
+                            ));
+                        }
+                    }
+                }
+            }
+            None => failures.push("opencode.json is unreadable or invalid".to_string()),
+        }
+    }
+
+    let real_opencode = home.join(".opencode").join("bin").join("opencode");
+    if real_opencode.exists() {
+        let wrapper = home.join(".local").join("bin").join("opencode");
+        let expected_wrapper_openai =
+            format!("OPENAI_BASE_URL=\"http://127.0.0.1:{}/v1\"", openai_port);
+        if !wrapper.exists()
+            || !file_contains(&wrapper, OPENCODE_WRAPPER_MARKER)
+            || !file_contains(&wrapper, &expected_wrapper_openai)
+        {
+            failures.push(
+                "managed opencode wrapper is missing or not routed to the OpenAI proxy".to_string(),
+            );
+        }
+    }
+
+    ProxyConfigVerification {
+        ok: failures.is_empty(),
+        failures,
+    }
 }
 
 fn rewrite_opencode_provider_base_urls(
@@ -494,6 +595,12 @@ mod tests {
         proxy_block, remove_opencode_provider_base_urls, rewrite_opencode_provider_base_urls,
     };
 
+    #[derive(serde::Deserialize)]
+    struct ModelFixture {
+        model: String,
+        openai: bool,
+    }
+
     #[test]
     fn shell_proxy_block_prepends_local_bin() {
         let block = proxy_block(8787, 8788);
@@ -514,11 +621,19 @@ mod tests {
 
     #[test]
     fn detects_openai_like_model_names() {
-        assert!(model_name_looks_openai("gpt-5.4"));
-        assert!(model_name_looks_openai("o3"));
-        assert!(model_name_looks_openai("gpt-5-codex"));
-        assert!(model_name_looks_openai("text-embedding-3-large"));
-        assert!(!model_name_looks_openai("claude-sonnet-4-6"));
+        let fixtures: Vec<ModelFixture> = serde_json::from_str(include_str!(
+            "../../../fixtures/openai-model-classification.json"
+        ))
+        .expect("valid model classification fixture");
+
+        for fixture in fixtures {
+            assert_eq!(
+                model_name_looks_openai(&fixture.model),
+                fixture.openai,
+                "model classification drifted for {}",
+                fixture.model
+            );
+        }
     }
 
     #[test]
@@ -530,6 +645,10 @@ mod tests {
         assert!(provider_looks_openai_compatible(
             "gateway",
             &serde_json::json!({ "api": "openai-responses" })
+        ));
+        assert!(provider_looks_openai_compatible(
+            "gateway",
+            &serde_json::json!({ "provider": { "api": "openai" }, "models": { "legacy": { "id": "claude-sonnet-4" } } })
         ));
         assert!(provider_looks_openai_compatible(
             "router",

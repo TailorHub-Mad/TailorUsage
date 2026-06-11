@@ -36,6 +36,8 @@ function resetStore() {
     claudeUsageError: null,
     codexUsage: null,
     codexUsageError: null,
+    codexReadStatus: { status: "ok", detail: null },
+    openAiLogDiagnostic: null,
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
@@ -439,6 +441,11 @@ describe("WeekSection", () => {
 
   it("shows a warning when OpenAI usage exists without recent OpenAI logs", () => {
     useStore.setState({
+      openAiLogDiagnostic: {
+        kind: "bypass_suspected",
+        message:
+          "OpenAI usage increased, but no new local OpenAI model logs were captured. Proxy bypass suspected: shell profiles missing OPENAI_BASE_URL=http://127.0.0.1:8788/v1",
+      },
       codexUsage: {
         rate_limit: {
           primary_window: {
@@ -471,9 +478,74 @@ describe("WeekSection", () => {
 
     expect(
       screen.getByText(
-        "OpenAI usage was detected, but no recent OpenAI model logs were captured. OpenCode may be using an unproxied provider.",
+        "OpenAI usage increased, but no new local OpenAI model logs were captured. Proxy bypass suspected: shell profiles missing OPENAI_BASE_URL=http://127.0.0.1:8788/v1",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("names an unreadable Codex DB when no OpenAI model logs are present", () => {
+    useStore.setState({
+      codexReadStatus: { status: "db-locked", detail: "database is locked" },
+      codexUsage: {
+        rate_limit: {
+          primary_window: {
+            used_percent: 79,
+            reset_at: 1_776_000_000,
+            limit_window_seconds: 3600,
+          },
+        },
+      },
+      weekLogs: [
+        {
+          ts: "2026-03-20T11:00:00.000Z",
+          request_id: "req-model-warning",
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "anthropic",
+          endpoint: "/v1/messages",
+          model: "claude-sonnet-4",
+          stream: false,
+          status: 200,
+          latency_ms: 120,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        },
+      ],
+    });
+
+    render(<WeekSection />);
+
+    expect(
+      screen.getByText("OpenAI usage was detected, but Codex history is currently unreadable (db-locked)."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps unknown models visible as unpriced with token counts", () => {
+    useStore.setState({
+      weekLogs: [
+        {
+          ts: "2026-03-20T11:00:00.000Z",
+          request_id: "req-model-unknown",
+          developer_id: "dev-a",
+          repo: "tailor-bar",
+          provider: "openai",
+          endpoint: "codex://threads",
+          model: "(unknown)",
+          stream: true,
+          status: 200,
+          latency_ms: 0,
+          input_tokens: 1200,
+          output_tokens: 300,
+          stop_reason: "",
+        },
+      ],
+    });
+
+    render(<WeekSection />);
+
+    expect(screen.getByText("(unknown)")).toBeInTheDocument();
+    expect(screen.getByText(/1 call .*1.5k tokens .*unpriced/)).toBeInTheDocument();
   });
 
   it("hides the OpenAI warning once recent OpenAI logs exist", () => {

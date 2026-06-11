@@ -1,5 +1,11 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { latestLogForProvider, logTime, normalizeLogRecord, normalizeLogRecords } from "./logs";
+import { latestLogForProvider, logTime, modelNameLooksOpenAi, normalizeLogRecord, normalizeLogRecords } from "./logs";
+
+interface ModelFixture {
+  model: string;
+  openai: boolean;
+}
 
 describe("normalizeLogRecord", () => {
   it("normalizes nested log payloads from mixed providers", () => {
@@ -124,9 +130,35 @@ describe("normalizeLogRecord", () => {
     });
   });
 
+  it("keeps explicit provider attribution even when strings are ambiguous", () => {
+    expect(
+      normalizeLogRecord({
+        ts: "2026-03-20T10:00:00.000Z",
+        provider: "openai",
+        endpoint: "/not-a-known-openai-path",
+        model: "unknown",
+      }),
+    ).toMatchObject({
+      provider: "openai",
+      model: "",
+    });
+  });
+
   it("returns null for invalid values", () => {
     expect(normalizeLogRecord(null)).toBeNull();
     expect(normalizeLogRecord("not-an-object")).toBeNull();
+  });
+});
+
+describe("modelNameLooksOpenAi", () => {
+  it("matches the shared Rust fixture classifications", () => {
+    const fixtures = JSON.parse(
+      readFileSync("fixtures/openai-model-classification.json", "utf8"),
+    ) as ModelFixture[];
+
+    for (const fixture of fixtures) {
+      expect(modelNameLooksOpenAi(fixture.model), fixture.model).toBe(fixture.openai);
+    }
   });
 });
 

@@ -1,0 +1,20 @@
+[
+  { "model": "gpt-5.4-codex-mini", "openai": true },
+  { "model": "GPT-4o", "openai": true },
+  { "model": "gpt4.1", "openai": true },
+  { "model": "o1", "openai": true },
+  { "model": "o2-preview", "openai": true },
+  { "model": "o3-mini", "openai": true },
+  { "model": "o4-mini", "openai": true },
+  { "model": "ft:gpt-4o:tailor:custom", "openai": true },
+  { "model": "codex-mini-latest", "openai": true },
+  { "model": "text-embedding-3-large", "openai": true },
+  { "model": "omni-moderation-latest", "openai": true },
+  { "model": "davinci-002", "openai": true },
+  { "model": "curie:ft-example", "openai": true },
+  { "model": "claude-sonnet-4-6", "openai": false },
+  { "model": "anthropic.claude-3-5-haiku", "openai": false },
+  { "model": "llama-3.1-70b", "openai": false },
+  { "model": "mistral-large", "openai": false },
+  { "model": "custom-gpt-wrapper", "openai": false }
+]

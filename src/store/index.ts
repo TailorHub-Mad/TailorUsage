@@ -4,6 +4,8 @@ import type {
   DeveloperMetrics,
   ClaudeUsage,
   CodexUsage,
+  CodexReadStatus,
+  OpenAiLogDiagnostic,
   ProxyStatus,
   Preferences,
   UpdateInfo,
@@ -17,6 +19,8 @@ interface AppStore {
   claudeUsageError: string | null;
   codexUsage: CodexUsage | null;
   codexUsageError: string | null;
+  codexReadStatus: { status: CodexReadStatus; detail: string | null };
+  openAiLogDiagnostic: OpenAiLogDiagnostic | null;
   todayLogs: LogRecord[];
   weekLogs: LogRecord[];
   proxyStatus: ProxyStatus;
@@ -34,6 +38,8 @@ interface AppStore {
   setClaudeUsageError: (error: string | null) => void;
   setCodexUsage: (usage: CodexUsage | null) => void;
   setCodexUsageError: (error: string | null) => void;
+  setCodexReadStatus: (status: { status: CodexReadStatus; detail: string | null }) => void;
+  setOpenAiLogDiagnostic: (diagnostic: OpenAiLogDiagnostic | null) => void;
   setTodayLogs: (logs: LogRecord[]) => void;
   setWeekLogs: (logs: LogRecord[]) => void;
   setProxyStatus: (status: ProxyStatus) => void;
@@ -55,6 +61,8 @@ export const useStore = create<AppStore>((set) => ({
   claudeUsageError: null,
   codexUsage: null,
   codexUsageError: null,
+  codexReadStatus: { status: "ok", detail: null },
+  openAiLogDiagnostic: null,
   todayLogs: [],
   weekLogs: [],
   proxyStatus: { running: false, enabled: false },
@@ -73,6 +81,8 @@ export const useStore = create<AppStore>((set) => ({
   setClaudeUsageError: (claudeUsageError) => set({ claudeUsageError }),
   setCodexUsage: (codexUsage) => set({ codexUsage }),
   setCodexUsageError: (codexUsageError) => set({ codexUsageError }),
+  setCodexReadStatus: (codexReadStatus) => set({ codexReadStatus }),
+  setOpenAiLogDiagnostic: (openAiLogDiagnostic) => set({ openAiLogDiagnostic }),
   setTodayLogs: (todayLogs) => set({ todayLogs }),
   setWeekLogs: (weekLogs) => set({ weekLogs }),
   setProxyStatus: (proxyStatus) => set({ proxyStatus }),
@@ -92,6 +102,8 @@ export const useStore = create<AppStore>((set) => ({
       claudeUsageError: null,
       codexUsage: null,
       codexUsageError: null,
+      codexReadStatus: { status: "ok", detail: null },
+      openAiLogDiagnostic: null,
       todayLogs: [],
       weekLogs: [],
     }),

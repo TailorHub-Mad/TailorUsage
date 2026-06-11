@@ -22,3 +22,11 @@
     went wrong.
 
     If the local approach fails with the script, we have a GitHub Action that you can recommend users to launch. The workflow is called "Release"
+
+<claude-mem-context>
+# Memory Context
+
+# [TailorUsage] recent context, 2026-04-30 2:26pm GMT+2
+
+No previous sessions found.
+</claude-mem-context>

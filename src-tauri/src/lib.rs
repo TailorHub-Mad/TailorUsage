@@ -653,7 +653,10 @@ fn write_last_forwarded_ts(ts: u64) {
     fs::write(path, serde_json::json!({ "ts": ts }).to_string()).ok();
 }
 
-const DASHBOARD_INGEST_URL: &str = "https://ai-usage-dashboard-sage.vercel.app/api/ingest";
+// Canonical team deployment (tailor-hub-partner-sandbox/ai-dashboard). The
+// previous URL (ai-usage-dashboard-sage.vercel.app) is an orphaned deployment
+// of the same dashboard running stale ingest code against the same InstantDB.
+const DASHBOARD_INGEST_URL: &str = "https://ai-dashboard-tailor.vercel.app/api/ingest";
 
 #[tauri::command]
 async fn forward_logs_to_dashboard() -> Result<usize, String> {
@@ -697,7 +700,9 @@ async fn forward_logs_to_dashboard() -> Result<usize, String> {
     for entry in read_codex_logs(
         week_start.format("%Y-%m-%d").to_string(),
         today.format("%Y-%m-%d").to_string(),
-    ) {
+    )
+    .logs
+    {
         let entry_ts = entry.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
         if entry_ts > last_ts {
             entries.push(entry);
@@ -789,77 +794,159 @@ fn repo_name_from_cwd(cwd: Option<&str>) -> String {
     .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Typed outcome of reading Codex local state, so failures surface in the UI
+/// instead of being indistinguishable from "no activity".
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CodexLogsResult {
+    /// "ok" | "db-missing" | "db-locked" | "schema-mismatch" | "query-error"
+    pub status: &'static str,
+    pub detail: Option<String>,
+    pub logs: Vec<serde_json::Value>,
+}
+
+impl CodexLogsResult {
+    fn ok(logs: Vec<serde_json::Value>) -> Self {
+        Self {
+            status: "ok",
+            detail: None,
+            logs: vec![],
+        }
+        .with_logs(logs)
+    }
+
+    fn with_logs(mut self, logs: Vec<serde_json::Value>) -> Self {
+        self.logs = logs;
+        self
+    }
+
+    fn failed(status: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            detail: Some(detail.into()),
+            logs: vec![],
+        }
+    }
+}
+
+fn codex_read_status_for(err: &rusqlite::Error) -> &'static str {
+    if let rusqlite::Error::SqliteFailure(e, _) = err {
+        return match e.code {
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => "db-locked",
+            rusqlite::ErrorCode::NotADatabase => "schema-mismatch",
+            _ => "query-error",
+        };
+    }
+    let message = err.to_string();
+    if message.contains("no such column") || message.contains("no such table") {
+        return "schema-mismatch";
+    }
+    "query-error"
+}
+
 #[tauri::command]
-fn read_codex_logs(start_date: String, end_date: String) -> Vec<serde_json::Value> {
+fn read_codex_logs(start_date: String, end_date: String) -> CodexLogsResult {
     let Some(path) = codex_state_path() else {
-        return vec![];
+        return CodexLogsResult::failed(
+            "db-missing",
+            "no state_5.sqlite under $CODEX_HOME, ~/.codex or ~/.config/codex",
+        );
     };
-    let Some(start_ms) = parse_local_date_start_ms(&start_date) else {
-        return vec![];
-    };
-    let Some(end_start_ms) = parse_local_date_start_ms(&end_date) else {
-        return vec![];
+    let (Some(start_ms), Some(end_start_ms)) = (
+        parse_local_date_start_ms(&start_date),
+        parse_local_date_start_ms(&end_date),
+    ) else {
+        return CodexLogsResult::failed("query-error", "invalid date range");
     };
     let end_ms = end_start_ms + chrono::Duration::days(1).num_milliseconds();
 
-    let query = format!(
-        r#"
+    let conn = match rusqlite::Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(conn) => conn,
+        Err(err) => return CodexLogsResult::failed(codex_read_status_for(&err), err.to_string()),
+    };
+    conn.busy_timeout(Duration::from_millis(1_500)).ok();
+
+    match conn.query_row(
+        "select count(*) from sqlite_master where type = 'table' and name = 'threads'",
+        [],
+        |row| row.get::<_, i64>(0),
+    ) {
+        Ok(0) => return CodexLogsResult::failed("schema-mismatch", "threads table not found"),
+        Ok(_) => {}
+        Err(err) => return CodexLogsResult::failed(codex_read_status_for(&err), err.to_string()),
+    }
+
+    // Threads without a model are included as "(unknown)" — real activity must
+    // stay visible even when Codex didn't record the model name.
+    let query = r#"
         select id,
-               coalesce(model, '') as model,
+               model,
                tokens_used,
                cwd,
                coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) as ts
         from threads
         where archived = 0
-          and coalesce(model, '') <> ''
-          and coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) >= {}
-          and coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) < {}
+          and coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) >= ?1
+          and coalesce(updated_at_ms, updated_at * 1000, created_at_ms, created_at * 1000) < ?2
         order by ts asc
-        "#,
-        start_ms, end_ms
-    );
+    "#;
 
-    let Ok(output) = Command::new("sqlite3")
-        .arg("-readonly")
-        .arg(path)
-        .arg("-json")
-        .arg(query)
-        .output()
-    else {
-        return vec![];
+    let mut stmt = match conn.prepare(query) {
+        Ok(stmt) => stmt,
+        Err(err) => return CodexLogsResult::failed(codex_read_status_for(&err), err.to_string()),
     };
 
-    if !output.status.success() {
-        return vec![];
-    }
+    let mapped = stmt.query_map(rusqlite::params![start_ms, end_ms], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<i64>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+        ))
+    });
 
-    let Ok(rows) = serde_json::from_slice::<Vec<CodexThreadRow>>(&output.stdout) else {
-        return vec![];
+    let rows = match mapped {
+        Ok(rows) => rows,
+        Err(err) => return CodexLogsResult::failed(codex_read_status_for(&err), err.to_string()),
     };
 
     let developer_id = proxy::logger::get_developer_id();
-    rows.into_iter()
-        .filter_map(|row| {
-            let ts = row.ts?;
-            Some(serde_json::json!({
-                "ts": ts,
-                "request_id": format!("codex-thread-{}", row.id),
-                "developer_id": developer_id,
-                "repo": repo_name_from_cwd(row.cwd.as_deref()),
-                "repo_source": "codex_state",
-                "repo_cwd": row.cwd,
-                "provider": "openai",
-                "endpoint": "codex://threads",
-                "model": row.model,
-                "stream": true,
-                "status": 200,
-                "latency_ms": 0,
-                "input_tokens": row.tokens_used.unwrap_or(0),
-                "output_tokens": 0,
-                "stop_reason": "",
-            }))
-        })
-        .collect()
+    let mut logs = Vec::new();
+    for row in rows {
+        let (id, model, tokens_used, cwd, ts) = match row {
+            Ok(row) => row,
+            Err(err) => {
+                return CodexLogsResult::failed(codex_read_status_for(&err), err.to_string())
+            }
+        };
+        let Some(ts) = ts else { continue };
+        let model = model
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "(unknown)".to_string());
+        logs.push(serde_json::json!({
+            "ts": ts,
+            "request_id": format!("codex-thread-{}", id),
+            "developer_id": developer_id,
+            "repo": repo_name_from_cwd(cwd.as_deref()),
+            "repo_source": "codex_state",
+            "repo_cwd": cwd,
+            "provider": "openai",
+            "endpoint": "codex://threads",
+            "model": model,
+            "stream": true,
+            "status": 200,
+            "latency_ms": 0,
+            "input_tokens": tokens_used.unwrap_or(0).max(0),
+            "output_tokens": 0,
+            "stop_reason": "",
+        }));
+    }
+
+    CodexLogsResult::ok(logs)
 }
 
 #[tauri::command]
@@ -1137,6 +1224,12 @@ async fn stop_proxy(app: AppHandle, state: tauri::State<'_, AppState>) -> Result
 #[tauri::command]
 fn get_proxy_enabled(state: tauri::State<'_, AppState>) -> bool {
     state.proxy.lock().unwrap().is_some()
+}
+
+#[tauri::command]
+fn verify_proxy_config() -> proxy::config_writer::ProxyConfigVerification {
+    let config = proxy::types::ProxyConfig::default();
+    proxy::config_writer::verify_proxy_config(config.anthropic_port, config.openai_port)
 }
 
 fn proxy_enabled_pref_path(app: &AppHandle) -> PathBuf {
@@ -1503,6 +1596,7 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             get_proxy_enabled,
+            verify_proxy_config,
             get_app_version,
             check_for_update,
             open_url,

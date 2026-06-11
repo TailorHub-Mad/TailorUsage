@@ -1,8 +1,17 @@
 import { useState } from "react";
 import { useStore } from "../../store";
 import { logTime } from "../../lib/logs";
+import { calculateLogCost } from "../../lib/cost";
+import { formatCost, formatTokens } from "../../lib/format";
 import type { TooltipProps } from "recharts";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+
+interface ModelUsage {
+  calls: number;
+  tokens: number;
+  pricedCost: number;
+  unpricedTokens: number;
+}
 
 function dayKey(date: Date): string {
   const year = date.getFullYear();
@@ -61,8 +70,8 @@ function rankUsage(entries: Record<string, number>) {
 }
 
 function topModelsWithOpenAiSignal(
-  rankedModels: [string, number][],
-  rankedOpenAiModels: [string, number][],
+  rankedModels: [string, ModelUsage][],
+  rankedOpenAiModels: [string, ModelUsage][],
 ) {
   const topModels = rankedModels.slice(0, 3);
   const topOpenAiModel = rankedOpenAiModels[0];
@@ -78,8 +87,39 @@ function topModelsWithOpenAiSignal(
   return [...topModels.slice(0, 2), topOpenAiModel];
 }
 
+function rankModelUsage(entries: Record<string, ModelUsage>) {
+  return Object.entries(entries).sort(
+    ([nameA, usageA], [nameB, usageB]) =>
+      usageB.calls - usageA.calls || nameA.localeCompare(nameB),
+  );
+}
+
+function modelBucketName(model: string | undefined): string {
+  const value = model?.trim();
+  if (!value || value.toLowerCase() === "unknown") return "(unknown)";
+  return value;
+}
+
+function modelCostLabel(usage: ModelUsage): string {
+  if (usage.unpricedTokens > 0) return `${formatTokens(usage.tokens)} tokens · unpriced`;
+  return `${formatTokens(usage.tokens)} tokens · ${formatCost(usage.pricedCost)}`;
+}
+
+function buildOpenAiWarningMessage(
+  diagnostic: ReturnType<typeof useStore.getState>["openAiLogDiagnostic"],
+  codexReadStatus: ReturnType<typeof useStore.getState>["codexReadStatus"],
+): string {
+  if (diagnostic?.message) return diagnostic.message;
+
+  if (codexReadStatus.status !== "ok") {
+    return `OpenAI usage was detected, but Codex history is currently unreadable (${codexReadStatus.status}).`;
+  }
+
+  return "OpenAI usage was detected, but no local OpenAI model activity was captured in this window.";
+}
+
 export function WeekSection() {
-  const { weekLogs, codexUsage } = useStore();
+  const { weekLogs, codexUsage, codexReadStatus, openAiLogDiagnostic } = useStore();
 
   const weekActivity = buildWeekActivity(weekLogs);
   const totalCalls = weekLogs.length;
@@ -94,23 +134,50 @@ export function WeekSection() {
   const knownRankedRepos = rankedRepos.filter(([repo]) => repo !== "unknown");
   const topRepos = (knownRankedRepos.length > 0 ? knownRankedRepos : rankedRepos).slice(0, 3);
 
-  const modelCounts: Record<string, number> = {};
-  const openAiModelCounts: Record<string, number> = {};
+  const modelCounts: Record<string, ModelUsage> = {};
+  const openAiModelCounts: Record<string, ModelUsage> = {};
   for (const log of weekLogs) {
-    const model = log.model?.trim();
-    if (!model || model === "unknown") continue;
-    modelCounts[model] = (modelCounts[model] || 0) + 1;
+    const model = modelBucketName(log.model);
+    const cost = calculateLogCost(log);
+    const tokens = log.input_tokens + log.output_tokens;
+    modelCounts[model] = modelCounts[model] || {
+      calls: 0,
+      tokens: 0,
+      pricedCost: 0,
+      unpricedTokens: 0,
+    };
+    modelCounts[model].calls += 1;
+    modelCounts[model].tokens += tokens;
+    if (cost === null) {
+      modelCounts[model].unpricedTokens += tokens;
+    } else {
+      modelCounts[model].pricedCost += cost;
+    }
+
     if (log.provider === "openai") {
-      openAiModelCounts[model] = (openAiModelCounts[model] || 0) + 1;
+      openAiModelCounts[model] = openAiModelCounts[model] || {
+        calls: 0,
+        tokens: 0,
+        pricedCost: 0,
+        unpricedTokens: 0,
+      };
+      openAiModelCounts[model].calls += 1;
+      openAiModelCounts[model].tokens += tokens;
+      if (cost === null) {
+        openAiModelCounts[model].unpricedTokens += tokens;
+      } else {
+        openAiModelCounts[model].pricedCost += cost;
+      }
     }
   }
-  const topModels = topModelsWithOpenAiSignal(rankUsage(modelCounts), rankUsage(openAiModelCounts));
+  const topModels = topModelsWithOpenAiSignal(rankModelUsage(modelCounts), rankModelUsage(openAiModelCounts));
   const hasReportedOpenAiUsage = [
     codexUsage?.rate_limit?.primary_window?.used_percent,
     codexUsage?.rate_limit?.secondary_window?.used_percent,
   ].some((value) => typeof value === "number" && value > 0);
   const hasRecentOpenAiLogs = weekLogs.some((log) => log.provider === "openai");
   const showOpenAiLogWarning = hasReportedOpenAiUsage && !hasRecentOpenAiLogs;
+  const openAiWarningMessage = buildOpenAiWarningMessage(openAiLogDiagnostic, codexReadStatus);
 
   const [collapsed, setCollapsed] = useState(true);
 
@@ -207,14 +274,14 @@ export function WeekSection() {
             <div className="mt-3 text-xs text-gray-400">
               <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top models</div>
               <div className="mt-1 space-y-1">
-                {topModels.map(([model, count], index) => (
+                {topModels.map(([model, usage], index) => (
                   <div key={model} className="flex items-baseline justify-between gap-3">
                     <span className="min-w-0 break-all text-gray-600">
                       <span className="mr-1 text-gray-400">{index + 1}.</span>
                       <span className="font-medium">{model}</span>
                     </span>
-                    <span className="shrink-0 text-gray-400">
-                      {count} {count === 1 ? "call" : "calls"}
+                    <span className="shrink-0 text-right text-gray-400">
+                      {usage.calls} {usage.calls === 1 ? "call" : "calls"} · {modelCostLabel(usage)}
                     </span>
                   </div>
                 ))}
@@ -224,7 +291,7 @@ export function WeekSection() {
 
           {showOpenAiLogWarning && (
             <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-800">
-              OpenAI usage was detected, but no recent OpenAI model logs were captured. OpenCode may be using an unproxied provider.
+              {openAiWarningMessage}
             </p>
           )}
         </div>
