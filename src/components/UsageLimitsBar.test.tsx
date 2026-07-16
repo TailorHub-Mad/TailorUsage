@@ -28,6 +28,7 @@ function resetStore() {
       tray_display: "cost",
       tray_source: "claude",
       notification_threshold: null,
+      visible_providers: ["claude", "openai"],
     },
     loading: false,
     error: null,
@@ -210,5 +211,20 @@ describe("UsageLimitsBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Log in" }));
 
     expect(apiMocks.openUrl).toHaveBeenCalledWith("https://chatgpt.com/auth/login");
+  });
+
+  it("renders only providers selected in preferences", () => {
+    useStore.setState({
+      preferences: {
+        ...useStore.getState().preferences,
+        tray_source: "openai",
+        visible_providers: ["openai"],
+      },
+    });
+
+    render(<UsageLimitsBar />);
+
+    expect(screen.queryByText("Claude")).not.toBeInTheDocument();
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
   });
 });

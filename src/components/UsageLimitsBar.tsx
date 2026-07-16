@@ -156,6 +156,7 @@ export function UsageLimitsBar() {
     claudeUsageError,
     codexUsage,
     codexUsageError,
+    preferences,
   } = useStore();
 
   const claudeTodayTokens = totalTokens(todayLogs.filter((log) => !log.provider || log.provider === "anthropic"));
@@ -172,10 +173,12 @@ export function UsageLimitsBar() {
   );
   const claudeNeedsLogin = claudeUsageError === LOGIN_REQUIRED_ERROR;
   const codexNeedsLogin = codexUsageError === LOGIN_REQUIRED_ERROR;
+  const showClaude = preferences.visible_providers.includes("claude");
+  const showOpenAI = preferences.visible_providers.includes("openai");
 
   return (
     <div className="px-4 pt-3 pb-2.5 flex flex-col gap-3 border-b border-gray-100">
-      <ProviderSection title="Claude" icon={<AnthropicIcon />} active={hasClaudeUsage}>
+      {showClaude && <ProviderSection title="Claude" icon={<AnthropicIcon />} active={hasClaudeUsage}>
         {claudeNeedsLogin ? (
           <LoginPrompt
             provider="Claude"
@@ -213,9 +216,9 @@ export function UsageLimitsBar() {
             />
           </>
         )}
-      </ProviderSection>
+      </ProviderSection>}
 
-      <ProviderSection title="OpenAI" icon={<OpenAIIcon />} active={hasCodexUsage}>
+      {showOpenAI && <ProviderSection title="OpenAI" icon={<OpenAIIcon />} active={hasCodexUsage}>
         {codexNeedsLogin ? (
           <LoginPrompt
             provider="OpenAI"
@@ -267,7 +270,7 @@ export function UsageLimitsBar() {
             />
           </>
         )}
-      </ProviderSection>
+      </ProviderSection>}
 
     </div>
   );

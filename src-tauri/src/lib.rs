@@ -1034,6 +1034,33 @@ fn normalize_preferences(value: serde_json::Value) -> serde_json::Value {
         .filter(|value| matches!(*value, "claude" | "openai"))
         .unwrap_or(DEFAULT_TRAY_SOURCE);
 
+    let mut visible_providers = value
+        .get("visible_providers")
+        .and_then(|v| v.as_array())
+        .map(|providers| {
+            providers
+                .iter()
+                .filter_map(|provider| provider.as_str())
+                .filter(|provider| matches!(*provider, "claude" | "openai"))
+                .fold(Vec::new(), |mut visible, provider| {
+                    if !visible.contains(&provider) {
+                        visible.push(provider);
+                    }
+                    visible
+                })
+        })
+        .unwrap_or_default();
+
+    if visible_providers.is_empty() {
+        visible_providers = vec!["claude", "openai"];
+    }
+
+    let tray_source = if visible_providers.contains(&tray_source) {
+        tray_source
+    } else {
+        visible_providers[0]
+    };
+
     let notification_threshold = value
         .get("notification_threshold")
         .and_then(|v| v.as_i64())
@@ -1051,6 +1078,7 @@ fn normalize_preferences(value: serde_json::Value) -> serde_json::Value {
         "tray_display": tray_display,
         "tray_source": tray_source,
         "notification_threshold": notification_threshold,
+        "visible_providers": visible_providers,
         "hide_from_dock": hide_from_dock,
     })
 }
@@ -1089,6 +1117,7 @@ fn get_preferences(app: AppHandle) -> serde_json::Value {
         "tray_display": prefs["tray_display"].clone(),
         "tray_source": prefs["tray_source"].clone(),
         "notification_threshold": prefs["notification_threshold"].clone(),
+        "visible_providers": prefs["visible_providers"].clone(),
     })
 }
 
@@ -1676,7 +1705,22 @@ mod tests {
         assert_eq!(prefs["tray_display"], json!("tokens"));
         assert_eq!(prefs["tray_source"], json!("claude"));
         assert!(prefs["notification_threshold"].is_null());
+        assert_eq!(prefs["visible_providers"], json!(["claude", "openai"]));
         assert_eq!(prefs["hide_from_dock"], json!(false));
+    }
+
+    #[test]
+    fn normalizes_visible_providers_and_keeps_tray_source_visible() {
+        let prefs = normalize_preferences(json!({
+            "tray_source": "claude",
+            "visible_providers": ["openai", "openai", "unsupported"],
+        }));
+
+        assert_eq!(prefs["visible_providers"], json!(["openai"]));
+        assert_eq!(prefs["tray_source"], json!("openai"));
+
+        let empty = normalize_preferences(json!({ "visible_providers": [] }));
+        assert_eq!(empty["visible_providers"], json!(["claude", "openai"]));
     }
 
     #[test]
@@ -1687,6 +1731,7 @@ mod tests {
                 "tray_display": "tokens",
                 "tray_source": "claude",
                 "notification_threshold": null,
+                "visible_providers": ["claude", "openai"],
                 "hide_from_dock": true,
             }),
             json!({
@@ -1697,6 +1742,7 @@ mod tests {
 
         assert_eq!(prefs["poll_interval"], json!(300000));
         assert_eq!(prefs["tray_source"], json!("openai"));
+        assert_eq!(prefs["visible_providers"], json!(["claude", "openai"]));
         assert_eq!(prefs["hide_from_dock"], json!(true));
     }
 }

@@ -41,7 +41,13 @@ function resetStore() {
     todayLogs: [],
     weekLogs: [],
     proxyStatus: { running: false, enabled: false },
-    preferences: { poll_interval: 900000, tray_display: "cost", tray_source: "claude", notification_threshold: null },
+    preferences: {
+      poll_interval: 900000,
+      tray_display: "cost",
+      tray_source: "claude",
+      notification_threshold: null,
+      visible_providers: ["claude", "openai"],
+    },
     loading: false,
     error: null,
   });
@@ -583,5 +589,51 @@ describe("WeekSection", () => {
     expect(
       screen.queryByText(/OpenAI usage was detected, but no recent OpenAI model logs were captured/),
     ).not.toBeInTheDocument();
+  });
+
+  it("filters metrics to the visible providers", () => {
+    useStore.setState({
+      preferences: {
+        ...useStore.getState().preferences,
+        tray_source: "openai",
+        visible_providers: ["openai"],
+      },
+      weekLogs: [
+        {
+          ts: "2026-03-20T10:00:00.000Z",
+          request_id: "req-claude-hidden",
+          developer_id: "dev-a",
+          repo: "claude-repo",
+          provider: "anthropic",
+          model: "claude-sonnet-4",
+          status: 200,
+          latency_ms: 100,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "end_turn",
+        },
+        {
+          ts: "2026-03-20T11:00:00.000Z",
+          request_id: "req-openai-visible",
+          developer_id: "dev-a",
+          repo: "openai-repo",
+          provider: "openai",
+          model: "gpt-5.4",
+          status: 200,
+          latency_ms: 100,
+          input_tokens: 100,
+          output_tokens: 50,
+          stop_reason: "stop",
+        },
+      ],
+    });
+
+    render(<WeekSection />);
+
+    expect(screen.getByText("gpt-5.4")).toBeInTheDocument();
+    expect(screen.getByText("openai-repo")).toBeInTheDocument();
+    expect(screen.queryByText("claude-sonnet-4")).not.toBeInTheDocument();
+    expect(screen.queryByText("claude-repo")).not.toBeInTheDocument();
+    expect(screen.getByText("1 calls")).toBeInTheDocument();
   });
 });

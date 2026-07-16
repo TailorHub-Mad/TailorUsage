@@ -29,6 +29,7 @@ function resetStore() {
       tray_display: "tokens",
       tray_source: "claude",
       notification_threshold: null,
+      visible_providers: ["claude", "openai"],
     },
     updateInfo: null,
     appVersion: "0.3.0",
@@ -55,6 +56,7 @@ describe("Footer", () => {
       tray_display: "tokens",
       tray_source: "claude",
       notification_threshold: null,
+      visible_providers: ["claude", "openai"],
     });
     expect(useStore.getState().preferences.poll_interval).toBe(300000);
   });

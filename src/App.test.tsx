@@ -36,6 +36,7 @@ function resetStore() {
       tray_display: "tokens",
       tray_source: "claude",
       notification_threshold: null,
+      visible_providers: ["claude", "openai"],
     },
     updateInfo: null,
     appVersion: "",
@@ -61,6 +62,7 @@ describe("App", () => {
       tray_display: "cost",
       tray_source: "openai",
       notification_threshold: 80,
+      visible_providers: ["openai"],
     });
     apiMocks.getLaunchAtLogin.mockResolvedValue(true);
     apiMocks.getHideFromDock.mockResolvedValue(true);
@@ -77,6 +79,7 @@ describe("App", () => {
         tray_display: "cost",
         tray_source: "openai",
         notification_threshold: 80,
+        visible_providers: ["openai"],
       });
       expect(useStore.getState().launchAtLogin).toBe(true);
       expect(useStore.getState().hideFromDock).toBe(true);

@@ -37,6 +37,7 @@ function resetStore() {
       tray_display: "cost",
       tray_source: "claude",
       notification_threshold: null,
+      visible_providers: ["claude", "openai"],
     },
     loading: false,
     error: null,
@@ -239,6 +240,7 @@ describe("usePolling", () => {
         tray_display: "tokens",
         tray_source: "claude",
         notification_threshold: null,
+        visible_providers: ["claude", "openai"],
       },
     });
 
@@ -275,6 +277,7 @@ describe("usePolling", () => {
         tray_display: "tokens",
         tray_source: "claude",
         notification_threshold: null,
+        visible_providers: ["claude", "openai"],
       },
     });
 
@@ -314,6 +317,7 @@ describe("usePolling", () => {
         tray_display: "tokens",
         tray_source: "openai",
         notification_threshold: null,
+        visible_providers: ["claude", "openai"],
       },
     });
 

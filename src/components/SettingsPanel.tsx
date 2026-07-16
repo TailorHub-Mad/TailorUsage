@@ -4,9 +4,14 @@ import {
   setLaunchAtLogin as saveLaunchAtLogin,
   setHideFromDock as saveHideFromDock,
 } from "../lib/api";
-import type { Preferences } from "../lib/types";
+import type { Preferences, ProviderId } from "../lib/types";
 
 const TRAY_SOURCE_OPTIONS: { label: string; value: Preferences["tray_source"] }[] = [
+  { label: "Claude", value: "claude" },
+  { label: "OpenAI", value: "openai" },
+];
+
+const PROVIDER_OPTIONS: { label: string; value: ProviderId }[] = [
   { label: "Claude", value: "claude" },
   { label: "OpenAI", value: "openai" },
 ];
@@ -25,6 +30,22 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     const newPrefs = { ...preferences, ...update };
     setPreferences(newPrefs);
     await savePreferences(newPrefs);
+  };
+
+  const toggleProvider = async (provider: ProviderId) => {
+    const isVisible = preferences.visible_providers.includes(provider);
+    if (isVisible && preferences.visible_providers.length === 1) return;
+
+    const visibleProviders = isVisible
+      ? preferences.visible_providers.filter((value) => value !== provider)
+      : [...preferences.visible_providers, provider];
+    const update: Partial<Preferences> = { visible_providers: visibleProviders };
+
+    if (isVisible && preferences.tray_source === provider) {
+      update.tray_source = visibleProviders[0];
+    }
+
+    await updatePrefs(update);
   };
 
   const handleLaunchAtLoginToggle = async () => {
@@ -91,9 +112,50 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex items-center justify-between">
+          <p className="text-xs text-gray-500">Show providers</p>
+          <div className="flex gap-1.5">
+            {PROVIDER_OPTIONS.map((provider) => {
+              const isVisible = preferences.visible_providers.includes(provider.value);
+              const isOnlyVisibleProvider = isVisible && preferences.visible_providers.length === 1;
+
+              return (
+                <button
+                  key={provider.value}
+                  type="button"
+                  onClick={() => toggleProvider(provider.value)}
+                  aria-label={`${isVisible ? "Hide" : "Show"} ${provider.label} provider`}
+                  aria-pressed={isVisible}
+                  disabled={isOnlyVisibleProvider}
+                  title={isOnlyVisibleProvider ? "At least one provider must remain visible" : undefined}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                    isVisible
+                      ? "bg-gray-100 font-medium text-gray-700"
+                      : "cursor-pointer text-gray-400 hover:text-gray-600"
+                  } ${isOnlyVisibleProvider ? "cursor-not-allowed" : "cursor-pointer"}`}
+                >
+                  <span
+                    className={`flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border ${
+                      isVisible ? "border-gray-500 bg-gray-700 text-white" : "border-gray-300 bg-white"
+                    }`}
+                    aria-hidden="true"
+                  >
+                    {isVisible && (
+                      <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
+                        <path d="M2.5 6.25 4.8 8.5 9.5 3.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </span>
+                  {provider.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
           <p className="text-xs text-gray-500">Tray percentage source</p>
           <div className="flex gap-1.5">
-            {TRAY_SOURCE_OPTIONS.map((opt) => (
+            {TRAY_SOURCE_OPTIONS.filter((opt) => preferences.visible_providers.includes(opt.value)).map((opt) => (
               <button
                 key={opt.value}
                 onClick={() => updatePrefs({ tray_source: opt.value })}

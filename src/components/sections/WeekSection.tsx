@@ -119,14 +119,20 @@ function buildOpenAiWarningMessage(
 }
 
 export function WeekSection() {
-  const { weekLogs, codexUsage, codexReadStatus, openAiLogDiagnostic } = useStore();
+  const { weekLogs, codexUsage, codexReadStatus, openAiLogDiagnostic, preferences } = useStore();
 
-  const weekActivity = buildWeekActivity(weekLogs);
-  const totalCalls = weekLogs.length;
+  const visibleWeekLogs = weekLogs.filter((log) =>
+    log.provider === "openai"
+      ? preferences.visible_providers.includes("openai")
+      : preferences.visible_providers.includes("claude"),
+  );
+
+  const weekActivity = buildWeekActivity(visibleWeekLogs);
+  const totalCalls = visibleWeekLogs.length;
   const activeDays = weekActivity.filter((day) => day.calls > 0).length;
 
   const repoCounts: Record<string, number> = {};
-  for (const log of weekLogs) {
+  for (const log of visibleWeekLogs) {
     const repo = log.repo?.trim() || "unknown";
     repoCounts[repo] = (repoCounts[repo] || 0) + 1;
   }
@@ -136,7 +142,7 @@ export function WeekSection() {
 
   const modelCounts: Record<string, ModelUsage> = {};
   const openAiModelCounts: Record<string, ModelUsage> = {};
-  for (const log of weekLogs) {
+  for (const log of visibleWeekLogs) {
     const model = modelBucketName(log.model);
     const cost = calculateLogCost(log);
     const tokens = log.input_tokens + log.output_tokens;
@@ -175,8 +181,8 @@ export function WeekSection() {
     codexUsage?.rate_limit?.primary_window?.used_percent,
     codexUsage?.rate_limit?.secondary_window?.used_percent,
   ].some((value) => typeof value === "number" && value > 0);
-  const hasRecentOpenAiLogs = weekLogs.some((log) => log.provider === "openai");
-  const showOpenAiLogWarning = hasReportedOpenAiUsage && !hasRecentOpenAiLogs;
+  const hasRecentOpenAiLogs = visibleWeekLogs.some((log) => log.provider === "openai");
+  const showOpenAiLogWarning = preferences.visible_providers.includes("openai") && hasReportedOpenAiUsage && !hasRecentOpenAiLogs;
   const openAiWarningMessage = buildOpenAiWarningMessage(openAiLogDiagnostic, codexReadStatus);
 
   const [collapsed, setCollapsed] = useState(true);

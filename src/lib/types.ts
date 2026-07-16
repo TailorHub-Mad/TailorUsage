@@ -102,11 +102,14 @@ export interface OpenAiLogDiagnostic {
   message: string;
 }
 
+export type ProviderId = "claude" | "openai";
+
 export interface Preferences {
   poll_interval: number;
   tray_display: "cost" | "tokens";
-  tray_source: "claude" | "openai";
+  tray_source: ProviderId;
   notification_threshold: number | null;
+  visible_providers: ProviderId[];
 }
 
 export interface UpdateInfo {
