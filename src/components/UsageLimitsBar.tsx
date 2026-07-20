@@ -32,33 +32,28 @@ function LimitRow({
   percent: number;
   detail?: string;
 }) {
-  const barColor =
-    percent >= 90 ? "bg-red-400" : percent >= 70 ? "bg-amber-400" : "bg-emerald-400";
-  const valueColor =
-    percent >= 90
-      ? "text-red-400 font-semibold"
-      : percent >= 70
-        ? "text-amber-500 font-semibold"
-        : "text-gray-500";
+  const level = percent >= 90 ? "critical" : percent >= 70 ? "warning" : "normal";
+  const clampedPercent = Math.max(0, Math.min(percent, 100));
 
   return (
-    <div className="flex flex-col gap-0.5">
-      <div className="flex items-center gap-2.5">
-        <span className="text-[10px] font-medium text-gray-400 w-12 shrink-0">
+    <div className={`limit-row level-${level}`}>
+      <div className="limit-main">
+        <span className="limit-label">
           {label}
         </span>
-        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+        <div className="usage-horizon">
+          <div className="horizon-grid" />
           <div
-            className={`h-full rounded-full transition-all duration-500 ${barColor}`}
-            style={{ width: `${Math.max(0, Math.min(percent, 100))}%` }}
+            className="horizon-fill"
+            style={{ width: `${clampedPercent}%` }}
           />
         </div>
-        <span className={`text-[10px] tabular-nums text-right shrink-0 w-10 ${valueColor}`}>
+        <span className="limit-value">
           {percent < 1 && percent > 0 ? "<1" : Math.round(percent)}%
         </span>
       </div>
       {detail && (
-        <div className="pl-[58px] text-[10px] leading-none text-gray-400 tabular-nums">
+        <div className="limit-detail">
           <span>{detail}</span>
         </div>
       )}
@@ -68,17 +63,18 @@ function LimitRow({
 
 function CreditsRow({ label, detail, current }: { label: string; detail: string; current: string }) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2.5">
-        <span className="text-[10px] font-medium text-gray-400 w-12 shrink-0">
+    <div className="limit-row credits-row">
+      <div className="limit-main">
+        <span className="limit-label">
           {label}
         </span>
-        <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-          <div className="h-full rounded-full bg-gray-800 transition-all duration-500" style={{ width: "100%" }} />
+        <div className="usage-horizon">
+          <div className="horizon-grid" />
+          <div className="horizon-fill" style={{ width: "100%" }} />
         </div>
-        <span className="text-[10px] tabular-nums text-right shrink-0 w-10 text-gray-500">--</span>
+        <span className="limit-value">--</span>
       </div>
-      <div className="pl-[58px] flex items-center justify-between gap-2 text-[10px] text-gray-400 tabular-nums">
+      <div className="limit-detail credits-detail">
         <span>{detail}</span>
         <span>{current}</span>
       </div>
@@ -88,7 +84,7 @@ function CreditsRow({ label, detail, current }: { label: string; detail: string;
 
 function ErrorRow({ message }: { message: string }) {
   return (
-    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-500">
+    <div className="provider-error">
       {message}
     </div>
   );
@@ -104,15 +100,15 @@ function LoginPrompt({
   url: string;
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-3">
-      <div className="flex items-center justify-between gap-3">
+    <div className="login-prompt">
+      <div className="login-prompt-layout">
         <div>
-          <div className="text-sm font-medium text-gray-800">Log in to {provider}</div>
-          <div className="mt-1 text-xs text-gray-500">{description}</div>
+          <div className="login-title">Log in to {provider}</div>
+          <div className="login-description">{description}</div>
         </div>
         <button
           onClick={() => openUrl(url).catch(() => {})}
-          className="shrink-0 rounded-lg bg-gray-900 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-gray-700"
+          className="primary-action"
         >
           Log in
         </button>
@@ -133,14 +129,19 @@ function ProviderSection({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2.5">
-      <div className="flex items-center gap-2">
-        {icon && <span className="flex items-center text-gray-400">{icon}</span>}
-        <span className="text-xs font-semibold text-gray-800">{title}</span>
-        <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-emerald-400" : "bg-gray-300"}`} />
+    <section className="provider-section">
+      <div className="provider-header">
+        <div className="provider-identity">
+          {icon && <span className="provider-icon">{icon}</span>}
+          <span className="provider-title">{title}</span>
+        </div>
+        <span
+          className={`provider-state ${active ? "is-live" : "is-idle"}`}
+          aria-hidden="true"
+        />
       </div>
-      {children}
-    </div>
+      <div className="provider-body">{children}</div>
+    </section>
   );
 }
 
@@ -177,7 +178,7 @@ export function UsageLimitsBar() {
   const showOpenAI = preferences.visible_providers.includes("openai");
 
   return (
-    <div className="px-4 pt-3 pb-2.5 flex flex-col gap-3 border-b border-gray-100">
+    <div className="usage-limits">
       {showClaude && <ProviderSection title="Claude" icon={<AnthropicIcon />} active={hasClaudeUsage}>
         {claudeNeedsLogin ? (
           <LoginPrompt

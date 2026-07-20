@@ -1,7 +1,7 @@
 const MODEL_COLORS: Record<string, string> = {
-  Opus: "bg-purple-500",
-  Sonnet: "bg-blue-500",
-  Haiku: "bg-emerald-500",
+  Opus: "model-bar-magenta",
+  Sonnet: "model-bar-cyan",
+  Haiku: "model-bar-cyan",
 };
 
 interface ModelBarProps {
@@ -10,17 +10,17 @@ interface ModelBarProps {
 }
 
 export function ModelBar({ name, pct }: ModelBarProps) {
-  const color = MODEL_COLORS[name] ?? "bg-neutral-500";
+  const color = MODEL_COLORS[name] ?? "model-bar-cyan";
 
   return (
-    <div className="flex items-center gap-2 mb-1">
-      <div className="flex-1 h-2 bg-neutral-800 rounded-full overflow-hidden">
+    <div className="model-bar-row">
+      <div className="model-bar-track">
         <div
-          className={`h-full rounded-full ${color}`}
+          className={`model-bar-fill ${color}`}
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="text-xs text-neutral-400 w-20 text-right">
+      <span className="model-bar-label">
         {name} {pct}%
       </span>
     </div>

@@ -11,14 +11,14 @@ export function Sparkline({ data }: SparklineProps) {
         <AreaChart data={data}>
           <defs>
             <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#9ca3af" stopOpacity={0.4} />
-              <stop offset="100%" stopColor="#9ca3af" stopOpacity={0} />
+              <stop offset="0%" stopColor="#00ffff" stopOpacity={0.4} />
+              <stop offset="100%" stopColor="#00ffff" stopOpacity={0} />
             </linearGradient>
           </defs>
           <Area
             type="monotone"
             dataKey="value"
-            stroke="#6b7280"
+            stroke="#00ffff"
             strokeWidth={1.5}
             fill="url(#sparkGrad)"
             isAnimationActive={false}

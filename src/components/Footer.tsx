@@ -27,16 +27,16 @@ export function Footer({ onRefresh, onSettings }: { onRefresh?: () => void; onSe
   };
 
   return (
-    <div className="px-4 py-3 flex items-center justify-between">
-      <div className="flex items-center gap-1.5">
+    <div className="footer-content">
+      <div className="poll-options" aria-label="Refresh interval">
         {POLL_OPTIONS.map((opt) => (
           <button
             key={opt.value}
             onClick={() => updatePrefs({ poll_interval: opt.value })}
-            className={`px-2 py-1 text-xs rounded-md transition-colors cursor-pointer ${
+            className={`poll-option ${
               preferences.poll_interval === opt.value
-                ? "bg-gray-100 text-gray-700 font-medium"
-                : "text-gray-400 hover:text-gray-600"
+                ? "is-selected"
+                : ""
             }`}
           >
             {opt.label}
@@ -44,15 +44,14 @@ export function Footer({ onRefresh, onSettings }: { onRefresh?: () => void; onSe
         ))}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="footer-actions">
         {appVersion && (
-          <span className="text-xs text-gray-400">v{appVersion}</span>
+          <span className="app-version">v{appVersion}</span>
         )}
         <button
           onClick={handleRefresh}
           title="Refresh now"
-          className="text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-          style={{ lineHeight: 1 }}
+          className="icon-button"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -78,8 +77,7 @@ export function Footer({ onRefresh, onSettings }: { onRefresh?: () => void; onSe
         <button
           onClick={onSettings}
           title="Settings"
-          className="text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
-          style={{ lineHeight: 1 }}
+          className="icon-button"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

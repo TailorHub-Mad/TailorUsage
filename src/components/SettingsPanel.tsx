@@ -61,12 +61,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="px-4 py-3">
-      <div className="flex items-center justify-between mb-4">
-        <span className="text-sm font-semibold text-gray-900">Settings</span>
+    <div className="settings-panel">
+      <div className="settings-header">
+        <span className="settings-title">Settings</span>
         <button
           onClick={onClose}
-          className="text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+          className="icon-button"
           title="Close settings"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -76,44 +76,32 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
         </button>
       </div>
 
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">Launch at login</p>
+      <div className="settings-list">
+        <div className="settings-row">
+          <p>Launch at login</p>
           <button
             onClick={handleLaunchAtLoginToggle}
             aria-label={launchAtLogin ? "Disable launch at login" : "Enable launch at login"}
-            className={`relative h-5 w-9 rounded-full transition-colors cursor-pointer ${
-              launchAtLogin ? "bg-green-400" : "bg-gray-200"
-            }`}
+            className={`switch-control ${launchAtLogin ? "is-enabled" : "is-disabled"}`}
           >
-            <div
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                launchAtLogin ? "translate-x-4" : "translate-x-0.5"
-              }`}
-            />
+            <div className="switch-thumb" />
           </button>
         </div>
 
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">Hide from dock</p>
+        <div className="settings-row">
+          <p>Hide from dock</p>
           <button
             onClick={handleHideFromDockToggle}
             aria-label={hideFromDock ? "Show in dock" : "Hide from dock"}
-            className={`relative h-5 w-9 rounded-full transition-colors cursor-pointer ${
-              hideFromDock ? "bg-green-400" : "bg-gray-200"
-            }`}
+            className={`switch-control ${hideFromDock ? "is-enabled" : "is-disabled"}`}
           >
-            <div
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                hideFromDock ? "translate-x-4" : "translate-x-0.5"
-              }`}
-            />
+            <div className="switch-thumb" />
           </button>
         </div>
 
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">Show providers</p>
-          <div className="flex gap-1.5">
+        <div className="settings-row settings-row-wide">
+          <p>Show providers</p>
+          <div className="segmented-control">
             {PROVIDER_OPTIONS.map((provider) => {
               const isVisible = preferences.visible_providers.includes(provider.value);
               const isOnlyVisibleProvider = isVisible && preferences.visible_providers.length === 1;
@@ -127,16 +115,12 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                   aria-pressed={isVisible}
                   disabled={isOnlyVisibleProvider}
                   title={isOnlyVisibleProvider ? "At least one provider must remain visible" : undefined}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
-                    isVisible
-                      ? "bg-gray-100 font-medium text-gray-700"
-                      : "cursor-pointer text-gray-400 hover:text-gray-600"
-                  } ${isOnlyVisibleProvider ? "cursor-not-allowed" : "cursor-pointer"}`}
+                  className={`segment-option provider-option ${isVisible ? "is-selected" : ""} ${
+                    isOnlyVisibleProvider ? "is-locked" : ""
+                  }`}
                 >
                   <span
-                    className={`flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border ${
-                      isVisible ? "border-gray-500 bg-gray-700 text-white" : "border-gray-300 bg-white"
-                    }`}
+                    className={`check-indicator ${isVisible ? "is-checked" : ""}`}
                     aria-hidden="true"
                   >
                     {isVisible && (
@@ -152,17 +136,15 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">Tray percentage source</p>
-          <div className="flex gap-1.5">
+        <div className="settings-row settings-row-wide">
+          <p>Tray percentage source</p>
+          <div className="segmented-control">
             {TRAY_SOURCE_OPTIONS.filter((opt) => preferences.visible_providers.includes(opt.value)).map((opt) => (
               <button
                 key={opt.value}
                 onClick={() => updatePrefs({ tray_source: opt.value })}
-                className={`px-3 py-1.5 text-xs rounded-md transition-colors cursor-pointer ${
-                  preferences.tray_source === opt.value
-                    ? "bg-gray-100 text-gray-700 font-medium"
-                    : "text-gray-400 hover:text-gray-600"
+                className={`segment-option ${
+                  preferences.tray_source === opt.value ? "is-selected" : ""
                 }`}
               >
                 {opt.label}
@@ -171,17 +153,15 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">Notify when usage above</p>
-          <div className="flex gap-1.5">
+        <div className="settings-row settings-row-wide">
+          <p>Notify when usage above</p>
+          <div className="segmented-control">
             {NOTIFICATION_THRESHOLD_OPTIONS.map((opt) => (
               <button
                 key={String(opt.value)}
                 onClick={() => updatePrefs({ notification_threshold: opt.value })}
-                className={`px-3 py-1.5 text-xs rounded-md transition-colors cursor-pointer ${
-                  preferences.notification_threshold === opt.value
-                    ? "bg-gray-100 text-gray-700 font-medium"
-                    : "text-gray-400 hover:text-gray-600"
+                className={`segment-option ${
+                  preferences.notification_threshold === opt.value ? "is-selected" : ""
                 }`}
               >
                 {opt.label}

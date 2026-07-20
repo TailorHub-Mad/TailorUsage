@@ -56,9 +56,9 @@ function WeekTooltip({ active, payload, label }: TooltipProps<number, string>) {
   if (typeof calls !== "number") return null;
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white px-2.5 py-2 shadow-sm">
-      <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-gray-400">{label}</div>
-      <div className="mt-1 text-xs font-medium text-gray-700">{calls} {calls === 1 ? "call" : "calls"}</div>
+    <div className="chart-tooltip">
+      <div className="chart-tooltip-label">{label}</div>
+      <div className="chart-tooltip-value">{calls} {calls === 1 ? "call" : "calls"}</div>
     </div>
   );
 }
@@ -188,12 +188,16 @@ export function WeekSection() {
   const [collapsed, setCollapsed] = useState(true);
 
   return (
-    <div className={`px-4 ${collapsed ? "pt-4 pb-0" : "py-4"}`}>
+    <section className={`metrics-section ${collapsed ? "is-collapsed" : "is-expanded"}`}>
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className={`flex h-8 w-full cursor-pointer items-center gap-1.5 text-left ${collapsed ? "" : "mb-3"}`}
+        className="metrics-toggle"
+        aria-expanded={!collapsed}
       >
-        <span className="text-base font-bold text-gray-900">Metrics</span>
+        <span className="metrics-title">Metrics</span>
+        <span className="metrics-summary">
+          {totalCalls > 0 ? `${totalCalls} calls · ${activeDays} active ${activeDays === 1 ? "day" : "days"}` : "Past 7 days"}
+        </span>
         <svg
           xmlns="http://www.w3.org/2000/svg"
           width="14"
@@ -204,7 +208,7 @@ export function WeekSection() {
           strokeWidth="2.5"
           strokeLinecap="round"
           strokeLinejoin="round"
-          className={`mt-0.5 text-gray-400 transition-transform duration-300 ${collapsed ? "rotate-180" : ""}`}
+          className={`metrics-chevron ${collapsed ? "is-collapsed" : ""}`}
         >
           <polyline points="6 9 12 15 18 9" />
         </svg>
@@ -220,54 +224,54 @@ export function WeekSection() {
         <div style={{ overflow: "hidden" }}>
           {totalCalls > 0 ? (
             <>
-              <div className="mb-3 h-28" aria-label="Past 7 days activity chart">
+              <div className="activity-chart" aria-label="Past 7 days activity chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={weekActivity} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke="#f3f4f6" strokeDasharray="3 3" vertical={false} />
+                    <CartesianGrid stroke="rgba(0, 255, 255, 0.12)" strokeDasharray="2 5" vertical={false} />
                     <XAxis
                       dataKey="label"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: "#9ca3af", fontSize: 10 }}
+                      tick={{ fill: "#7187a0", fontSize: 10, fontFamily: "Space Mono" }}
                       padding={{ left: 12, right: 12 }}
                     />
                     <YAxis hide domain={[0, "dataMax + 2"]} />
                     <Tooltip
                       content={<WeekTooltip />}
-                      cursor={{ stroke: "#d1d5db", strokeDasharray: "4 4" }}
+                      cursor={{ stroke: "#ff006e", strokeDasharray: "3 4" }}
                     />
                     <Line
                       type="monotone"
                       dataKey="calls"
-                      stroke="#111827"
+                      stroke="#00ffff"
                       strokeWidth={2}
-                      dot={{ r: 3, fill: "#111827", strokeWidth: 0 }}
-                      activeDot={{ r: 4, fill: "#111827", strokeWidth: 0 }}
+                      dot={{ r: 3, fill: "#0a0014", stroke: "#00ffff", strokeWidth: 1.5 }}
+                      activeDot={{ r: 4, fill: "#ff006e", stroke: "#ff006e", strokeWidth: 0 }}
                       isAnimationActive={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
 
-              <div className="text-xs text-gray-400">
-                <span className="text-gray-600 font-medium">{totalCalls} calls</span> across {activeDays} active {activeDays === 1 ? "day" : "days"}
+              <div className="activity-total">
+                <span>{totalCalls} calls</span> across {activeDays} active {activeDays === 1 ? "day" : "days"}
               </div>
             </>
           ) : (
-            <p className="text-xs text-gray-300 text-center py-2">No activity in the past 7 days</p>
+            <p className="empty-metrics">No activity in the past 7 days</p>
           )}
 
           {topRepos.length > 0 && (
-            <div className="mt-2 text-xs text-gray-400">
-              <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top 3 repos</div>
-              <div className="mt-1 space-y-1">
+            <div className="metric-ranking">
+              <div className="ranking-title">Top 3 repos</div>
+              <div className="ranking-list">
                 {topRepos.map(([repo, count], index) => (
-                  <div key={repo} className="flex items-baseline justify-between gap-3">
-                    <span className="min-w-0 truncate text-gray-600">
-                      <span className="mr-1 text-gray-400">{index + 1}.</span>
-                      <span className="font-medium">{repo}</span>
+                  <div key={repo} className="ranking-row">
+                    <span className="ranking-name">
+                      <span className="ranking-index">{index + 1}.</span>
+                      <span>{repo}</span>
                     </span>
-                    <span className="shrink-0 text-gray-400">
+                    <span className="ranking-value">
                       {count} {count === 1 ? "contribution" : "contributions"}
                     </span>
                   </div>
@@ -277,16 +281,16 @@ export function WeekSection() {
           )}
 
           {topModels.length > 0 && (
-            <div className="mt-3 text-xs text-gray-400">
-              <div className="font-medium uppercase tracking-[0.08em] text-[10px] text-gray-400">Top models</div>
-              <div className="mt-1 space-y-1">
+            <div className="metric-ranking">
+              <div className="ranking-title">Top models</div>
+              <div className="ranking-list">
                 {topModels.map(([model, usage], index) => (
-                  <div key={model} className="flex items-baseline justify-between gap-3">
-                    <span className="min-w-0 break-all text-gray-600">
-                      <span className="mr-1 text-gray-400">{index + 1}.</span>
-                      <span className="font-medium">{model}</span>
+                  <div key={model} className="ranking-row">
+                    <span className="ranking-name model-name">
+                      <span className="ranking-index">{index + 1}.</span>
+                      <span>{model}</span>
                     </span>
-                    <span className="shrink-0 text-right text-gray-400">
+                    <span className="ranking-value model-value">
                       {usage.calls} {usage.calls === 1 ? "call" : "calls"} · {modelCostLabel(usage)}
                     </span>
                   </div>
@@ -296,12 +300,12 @@ export function WeekSection() {
           )}
 
           {showOpenAiLogWarning && (
-            <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-800">
+            <p className="metrics-warning">
               {openAiWarningMessage}
             </p>
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }

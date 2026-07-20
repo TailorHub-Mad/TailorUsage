@@ -14,14 +14,12 @@ export function ProxySwitch({ enabled, loading = false, onToggle }: ProxySwitchP
       onClick={onToggle}
       disabled={loading}
       aria-label={enabled ? "Disable proxy" : "Enable proxy"}
-      className={`relative h-5 w-9 rounded-full transition-colors ${
-        enabled ? "bg-green-400" : "bg-red-300"
-      } ${loading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+      className={`switch-control ${enabled ? "is-enabled" : "is-disabled"} ${
+        loading ? "is-loading" : ""
+      }`}
     >
       <div
-        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-          enabled ? "translate-x-4" : "translate-x-0.5"
-        }`}
+        className="switch-thumb"
       />
     </button>
   );
@@ -74,10 +72,9 @@ export function useProxyToggleControl() {
 
 export function ProxyToggle({ error = null }: ProxyToggleProps) {
   return (
-    <div className="px-4 py-3 space-y-2">
-      {/* Error */}
+    <div className={`proxy-error-slot ${error ? "has-error" : ""}`}>
       {error && (
-        <p className="text-xs text-red-400">{error}</p>
+        <p>{error}</p>
       )}
     </div>
   );
@@ -102,8 +99,8 @@ export function ProxyMessage({ show }: { show: boolean }) {
   if (!isMounted) return null;
 
   return (
-    <p className={`text-xs text-gray-400 text-right transition-opacity duration-400 ${
-      isVisible ? 'opacity-100' : 'opacity-0'
+    <p className={`proxy-message ${
+      isVisible ? "is-visible" : ""
     }`}>
       Open a new terminal for {proxyStatus.enabled ? "proxy" : "this change"} to take effect.
     </p>
