@@ -1,0 +1,426 @@
+# Tailor CI: detects the stacks in this repository, then lints, type-checks and tests
+# only what it finds (Node/TypeScript, Python, Terraform). This file belongs to the
+# repository: adapt the knobs below, or anything else, as the project needs.
+name: Tailor CI
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tailor-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TAILOR_CI_EXCLUDE: ""                # comma-separated path prefixes to ignore, e.g. "legacy,scripts/old"
+  TAILOR_CI_BUILD: "false"             # "true" also runs each Node project's build script
+  TAILOR_CI_PYTHON_TYPES: "standard"   # pyright mode when the repo has no pyright config: basic | standard | strict | off
+  TAILOR_CI_MIN_COVERAGE: "80"         # minimum line coverage of the tests, in %; 0 turns the check off
+  HUSKY: "0"
+  CI: "true"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      # *_dirs drive the matrices; node and python map each directory to its commands.
+      node_dirs: ${{ steps.detect.outputs.node_dirs }}
+      node: ${{ steps.detect.outputs.node }}
+      python_dirs: ${{ steps.detect.outputs.python_dirs }}
+      python: ${{ steps.detect.outputs.python }}
+      terraform: ${{ steps.detect.outputs.terraform }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: detect
+        name: Detect stacks
+        run: |
+          python3 - <<'PY'
+          import json, os, re, tomllib
+          from pathlib import Path
+
+          IGNORED = {"node_modules", "vendor", "dist", "build", "templates", "examples", "fixtures", "__pycache__"}
+          EXTRA = [p.strip().strip("/") for p in os.environ.get("TAILOR_CI_EXCLUDE", "").split(",") if p.strip()]
+          ESLINT = ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts",
+                    "eslint.config.mts", ".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json",
+                    ".eslintrc.yml", ".eslintrc.yaml")
+          PLACEHOLDER = re.compile(r"no test specified|^\s*echo\b|exit 1\s*$")
+          raw_coverage = os.environ.get("TAILOR_CI_MIN_COVERAGE", "80").strip()
+          MIN_COVERAGE = min(int(raw_coverage), 100) if raw_coverage.isdigit() else 80
+
+          def fail(message):
+              return f'echo "::error::{message}" && exit 1'
+
+          NO_TESTS = fail(f"No tests found, so coverage is 0% (minimum {MIN_COVERAGE}%). "
+                          "Add tests or lower TAILOR_CI_MIN_COVERAGE.")
+          UNMEASURED = fail("Tailor CI measures coverage with Jest, Vitest or pytest only. Enforce "
+                            f"{MIN_COVERAGE}% in this project's test command, then set TAILOR_CI_MIN_COVERAGE=0.")
+          root = Path(".")
+          warnings, summary = [], []
+
+          def ignored(path):
+              rel = path.as_posix()
+              return (any(part in IGNORED or part.startswith(".") for part in path.parts)
+                      or any(rel == p or rel.startswith(p + "/") for p in EXTRA))
+
+          files = [p for p in root.rglob("*") if p.is_file() and not ignored(p.relative_to(root))]
+          dirs_with = lambda *names: sorted({p.parent for p in files if p.name in names}, key=lambda d: len(d.parts))
+
+          def version(text, pattern, default):
+              text = (text or "").strip()
+              return text if re.fullmatch(pattern, text) else default
+
+          def read_json(path):
+              try:
+                  return json.loads(path.read_text())
+              except (OSError, ValueError):
+                  return {}
+
+          # ---------- Node / TypeScript ----------
+          node = []
+          packages = dirs_with("package.json")
+          workspaces = [d for d in packages
+                        if read_json(d / "package.json").get("workspaces")
+                        or any((d / f).exists() for f in ("pnpm-workspace.yaml", "nx.json", "turbo.json", "lerna.json"))]
+          for d in packages:
+              if any(w in d.parents for w in workspaces):
+                  continue  # a workspace member; its root runs the checks
+              pkg = read_json(d / "package.json")
+              scripts = pkg.get("scripts") or {}
+              locks = {f: m for f, m in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lock", "bun"),
+                                         ("bun.lockb", "bun"), ("package-lock.json", "npm")) if (d / f).exists()}
+              declared = (pkg.get("packageManager") or "").split("@")[0]
+              managers = sorted(set(locks.values()))
+              if len(managers) > 1:
+                  pm = declared if declared in managers else managers[0]
+                  warnings.append(f"{d}: several lockfiles ({', '.join(locks)}); using {pm}")
+              elif managers:
+                  pm = managers[0]
+                  if declared and declared != pm:
+                      warnings.append(f"{d}: packageManager says {declared} but the lockfile is {pm}; using {pm}")
+              else:
+                  pm = declared if declared in {"pnpm", "yarn", "bun"} else "npm"
+                  warnings.append(f"{d}: no lockfile; installing without one")
+              berry = pm == "yarn" and ((d / ".yarnrc.yml").exists()
+                                        or re.match(r"yarn@[2-9]", pkg.get("packageManager") or ""))
+              frozen = bool(locks)
+              install = {"npm": "npm ci" if frozen else "npm install",
+                         "pnpm": "pnpm install " + ("--frozen-lockfile" if frozen else "--no-frozen-lockfile"),
+                         "yarn": ("yarn install --immutable" if berry else "yarn install --frozen-lockfile")
+                                 if frozen else "yarn install",
+                         "bun": "bun install --frozen-lockfile" if frozen else "bun install"}[pm]
+              run = {"npm": "npm run", "pnpm": "pnpm run", "yarn": "yarn run", "bun": "bun run"}[pm]
+              exe = {"npm": "npx --no-install", "pnpm": "pnpm exec", "yarn": "yarn", "bun": "bun x"}[pm]
+              workspace = d in workspaces
+              has_eslint = "eslintConfig" in pkg or any((d / f).exists() for f in ESLINT)
+              lint_script = scripts.get("lint", "")
+              if lint_script and "--fix" not in lint_script and "next lint" not in lint_script:
+                  lint = f"{run} lint"
+              else:
+                  lint = f"{exe} eslint ." if has_eslint and not workspace else ""
+              types = next((f"{run} {s}" for s in ("typecheck", "type-check", "check-types", "tsc") if s in scripts), "")
+              if not types and not workspace and (d / "tsconfig.json").exists():
+                  types = f"{exe} tsc --noEmit"
+              test = f"{run} test" if scripts.get("test") and not PLACEHOLDER.search(scripts["test"]) else ""
+              if workspace and not (lint or types or test):
+                  if (d / "nx.json").exists():
+                      lint, test = "", f"{exe} nx run-many -t lint typecheck test"
+                  elif (d / "turbo.json").exists():
+                      tasks = read_json(d / "turbo.json")
+                      tasks = tasks.get("tasks") or tasks.get("pipeline") or {}
+                      wanted = [t for t in ("lint", "typecheck", "test") if t in tasks]
+                      test = f"{exe} turbo run {' '.join(wanted)}" if wanted else ""
+              if MIN_COVERAGE and (lint or types or test):
+                  # The test step also enforces coverage; projects without tests fail it.
+                  script = scripts.get("test", "").strip()
+                  deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+                  runner = next((t for t in ("vitest", "jest") if t in deps or script.startswith(t)), "")
+                  direct = bool(runner) and re.fullmatch(rf"{runner}\b[^&|;]*", script) is not None
+                  if not test:
+                      test = NO_TESTS
+                  elif workspace and not script:
+                      test = f"{test} && {UNMEASURED}"  # Nx/Turbo: coverage belongs in each project's config
+                  elif runner == "jest":
+                      threshold = json.dumps({"global": {"lines": MIN_COVERAGE}})
+                      test = f"{exe} {script if direct else 'jest --ci'} --coverage --coverageThreshold='{threshold}'"
+                  elif runner == "vitest" and not {"@vitest/coverage-v8", "@vitest/coverage-istanbul"} & deps.keys():
+                      test = fail("Vitest needs @vitest/coverage-v8 in devDependencies to measure coverage.")
+                  elif runner == "vitest":
+                      test = (f"{exe} {script if direct else 'vitest run'} "
+                              f"--coverage.enabled --coverage.thresholds.lines={MIN_COVERAGE}")
+                  else:
+                      test = UNMEASURED
+              build = f"{run} build" if os.environ.get("TAILOR_CI_BUILD") == "true" and "build" in scripts else ""
+              nvmrc = next((d / f for f in (".nvmrc", ".node-version") if (d / f).exists()), None) \
+                  or next((root / f for f in (".nvmrc", ".node-version") if (root / f).exists()), None)
+              engine = re.search(r"\d+", (pkg.get("engines") or {}).get("node", ""))
+              node_version = version(nvmrc.read_text() if nvmrc else (engine.group() if engine else ""),
+                                     r"v?\d+(\.\d+){0,2}|lts/[\w*-]+|node|latest", "22")
+              steps = {"lint": lint, "types": types, "test": test, "build": build}
+              summary.append((f"`{d}`", f"Node {node_version}, {pm}", steps))
+              if not any(steps.values()):
+                  continue
+              node.append({"dir": str(d), "pm": pm, "node_version": node_version, "install": install,
+                           "cache": "npm" if pm == "npm" and frozen else "",
+                           "lockfile": str(d / "package-lock.json") if pm == "npm" and frozen else "",
+                           "corepack": pm in {"pnpm", "yarn"}, **steps})
+
+          # ---------- Python ----------
+          python = []
+          REQUIREMENTS = re.compile(r"(dev-)?requirements(-dev)?\.txt")
+          manifests = dirs_with("pyproject.toml", "setup.py")
+          manifests += [p.parent for p in files if REQUIREMENTS.fullmatch(p.name)]
+          projects = sorted(set(manifests), key=lambda d: len(d.parts))
+          projects = [d for i, d in enumerate(projects) if not any(p in d.parents for p in projects[:i])]
+          if not projects and any(p.suffix in {".py", ".ipynb"} for p in files):
+              projects = [Path(".")]
+          for d in projects:
+              pyproject = {}
+              if (d / "pyproject.toml").exists():
+                  try:
+                      pyproject = tomllib.loads((d / "pyproject.toml").read_text())
+                  except (OSError, ValueError):
+                      warnings.append(f"{d}: pyproject.toml could not be parsed")
+              tool = pyproject.get("tool", {})
+              pinned = next((x / ".python-version" for x in (d, root) if (x / ".python-version").exists()), None)
+              lower = re.search(r">=\s*(3\.\d+)", pyproject.get("project", {}).get("requires-python", ""))
+              py = version(pinned.read_text().splitlines()[0] if pinned else (lower.group(1) if lower else ""),
+                           r"3\.\d+(\.\d+)?", "3.12")
+              if tuple(int(x) for x in py.split(".")[:2]) < (3, 9):
+                  warnings.append(f"{d}: Python {py} is not supported by the runners; using 3.12")
+                  py = "3.12"
+              requirements = sorted(p.name for p in d.glob("*.txt") if REQUIREMENTS.fullmatch(p.name))
+              if (d / "uv.lock").exists():
+                  install = f"uv sync --frozen --python {py}"
+              elif requirements:
+                  install = f"uv venv --python {py} && uv pip install " + " ".join(f"-r {r}" for r in requirements)
+              elif "project" in pyproject or "build-system" in pyproject or (d / "setup.py").exists():
+                  extras = "[dev]" if "dev" in pyproject.get("project", {}).get("optional-dependencies", {}) else ""
+                  install = f"uv venv --python {py} && uv pip install -e '.{extras}'"
+              else:
+                  install = f"uv venv --python {py}"
+              ruff_config = "ruff" in tool or any((d / f).exists() for f in ("ruff.toml", ".ruff.toml"))
+              # Without a ruff config, only the rules that catch real bugs; newer ruff defaults add style rules.
+              lint = ("uvx ruff check . && uvx ruff format --check ." if ruff_config
+                      else "uvx ruff check --select E4,E7,E9,F .")
+              mode = os.environ.get("TAILOR_CI_PYTHON_TYPES", "standard")
+              if "basedpyright" in tool:
+                  types = "uvx basedpyright --pythonpath .venv/bin/python"
+              elif "pyright" in tool or (d / "pyrightconfig.json").exists():
+                  types = "uvx pyright --pythonpath .venv/bin/python"
+              elif mode in {"basic", "standard", "strict"}:
+                  types = (f"echo '{{\"typeCheckingMode\": \"{mode}\"}}' > pyrightconfig.json && "
+                           "uvx pyright --pythonpath .venv/bin/python")
+              else:
+                  types = ""
+              has_tests = any(d in p.parents for p in files
+                              if re.fullmatch(r"test_.*\.py|.*_test\.py", p.name))
+              coverage_config = (d / ".coveragerc").exists() or "coverage" in tool or any(
+                  "[coverage:" in (d / f).read_text() for f in ("setup.cfg", "tox.ini") if (d / f).exists())
+              if has_tests and MIN_COVERAGE:
+                  # Without a coverage config, measure the project but not its tests or virtualenv.
+                  rc = "" if coverage_config else (
+                      "printf '[run]\\nomit = */tests/*,*/test_*.py,*_test.py,*/conftest.py,*/.venv/*\\n' "
+                      '> "$RUNNER_TEMP/tailor-coveragerc" && ')
+                  cov = "--cov" if coverage_config else '--cov=. --cov-config="$RUNNER_TEMP/tailor-coveragerc"'
+                  test = (rc + "(python -c 'import pytest_cov' 2>/dev/null || uv pip install pytest pytest-cov) && "
+                          f"python -m pytest -q {cov} --cov-report=term-missing:skip-covered "
+                          f"--cov-fail-under={MIN_COVERAGE}")
+              elif has_tests:
+                  test = ("(python -m pytest --version >/dev/null 2>&1 || uv pip install pytest) && "
+                          "python -m pytest -q")
+              else:
+                  test = NO_TESTS if MIN_COVERAGE else ""
+              steps = {"lint": lint, "types": types, "test": test}
+              summary.append((f"`{d}`", f"Python {py}", steps))
+              python.append({"dir": str(d), "python_version": py, "install": install, **steps})
+
+          # ---------- Terraform ----------
+          tf_dirs = sorted({p.parent for p in files if p.suffix == ".tf"}, key=lambda d: len(d.parts))
+          locked = [d for d in tf_dirs if (d / ".terraform.lock.hcl").exists()]
+          terraform = [str(d) for d in (locked or [d for d in tf_dirs if not any(t in d.parents for t in tf_dirs)])]
+          for d in terraform:
+              summary.append((f"`{d}`", "Terraform", {"fmt": "terraform fmt -check", "validate": "terraform validate"}))
+
+          other = sorted({kind for p in files for ext, kind in ((".java", "Java"), (".kt", "Kotlin"), (".rs", "Rust"),
+                                                                 (".go", "Go"), (".swift", "Swift"), (".dart", "Dart"),
+                                                                 (".rb", "Ruby"), (".php", "PHP")) if p.suffix == ext})
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              for name, projects in (("node", node), ("python", python)):
+                  out.write(f"{name}_dirs={json.dumps([p['dir'] for p in projects])}\n")
+                  out.write(f"{name}={json.dumps({p['dir']: p for p in projects})}\n")
+              out.write(f"terraform={json.dumps(terraform)}\n")
+          lines = ["## Tailor CI", "", "| Project | Stack | Runs |", "|---|---|---|"]
+          def label(step, command):
+              if step != "test" or not MIN_COVERAGE:
+                  return step
+              if command == NO_TESTS:
+                  return "❌ no tests (coverage 0%)"
+              if UNMEASURED in command or command.startswith('echo "::error::'):
+                  return "❌ coverage not measurable"
+              return f"test + coverage ≥ {MIN_COVERAGE}%"
+
+          for project, stack, steps in summary:
+              ran = ", ".join(label(k, v) for k, v in steps.items() if v) or "nothing to run"
+              lines.append(f"| {project} | {stack} | {ran} |")
+          if not summary:
+              lines.append("| – | nothing detected | – |")
+          if other:
+              lines += ["", f"Not covered: {', '.join(other)}."]
+          for warning in warnings:
+              print(f"::warning::{warning}")
+              lines.append(f"- ⚠️ {warning}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n".join(lines) + "\n")
+          PY
+
+  # Runs on every repository, in parallel with the stack jobs. Both scanners are free, open
+  # source and downloaded at their latest release. To accept a finding, add an osv-scanner.toml
+  # (IgnoredVulns) or a .gitleaksignore entry with the reason.
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # gitleaks reads the pull request's commits
+      - name: Install scanners (latest releases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          gh release download --repo google/osv-scanner --pattern osv-scanner_linux_amd64 \
+            --output "$RUNNER_TEMP/bin/osv-scanner"
+          gh release download --repo gitleaks/gitleaks --pattern '*_linux_x64.tar.gz' --output - \
+            | tar -xz -C "$RUNNER_TEMP/bin" gitleaks
+          chmod +x "$RUNNER_TEMP/bin/osv-scanner"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"  # on PATH from the next step
+          "$RUNNER_TEMP/bin/osv-scanner" --version
+          "$RUNNER_TEMP/bin/gitleaks" version
+      - name: Vulnerable dependencies (OSV-Scanner)
+        # Lockfiles pin every package; --no-resolve stops guessing versions for loose manifests.
+        run: osv-scanner scan source --recursive --allow-no-lockfiles --no-resolve .
+      - name: Leaked secrets (Gitleaks)
+        if: ${{ !cancelled() }}
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            gitleaks git --no-banner --redact --log-opts="$BASE..$HEAD" .  # the PR's commits
+          else
+            gitleaks dir --no-banner --redact .  # the current files
+          fi
+
+  # Only the directory is in each matrix, so GitHub shows "node (apps/web)" for a run job and a
+  # plain "node" for a skipped one; the commands come from detect's output for that directory.
+  node:
+    name: node
+    needs: detect
+    if: needs.detect.outputs.node_dirs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.detect.outputs.node_dirs) }}
+    env:
+      TAILOR_PM: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].pm }}
+      TAILOR_COREPACK: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].corepack }}
+      TAILOR_INSTALL: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].install }}
+      TAILOR_LINT: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].lint }}
+      TAILOR_TYPES: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].types }}
+      TAILOR_TEST: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].test }}
+      TAILOR_BUILD: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].build }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].node_version }}
+          cache: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].cache }}
+          cache-dependency-path: ${{ fromJSON(needs.detect.outputs.node)[matrix.dir].lockfile }}
+          package-manager-cache: false
+      - if: env.TAILOR_PM == 'bun'
+        uses: oven-sh/setup-bun@v2
+      - if: env.TAILOR_COREPACK == 'true'
+        run: corepack enable || (npm install --global corepack && corepack enable)
+      - name: Install
+        run: ${{ env.TAILOR_INSTALL }}
+      - name: Lint
+        if: ${{ !cancelled() && env.TAILOR_LINT != '' }}
+        run: ${{ env.TAILOR_LINT }}
+      - name: Type-check
+        if: ${{ !cancelled() && env.TAILOR_TYPES != '' }}
+        run: ${{ env.TAILOR_TYPES }}
+      - name: Test
+        if: ${{ !cancelled() && env.TAILOR_TEST != '' }}
+        run: ${{ env.TAILOR_TEST }}
+      - name: Build
+        if: ${{ !cancelled() && env.TAILOR_BUILD != '' }}
+        run: ${{ env.TAILOR_BUILD }}
+
+  python:
+    name: python
+    needs: detect
+    if: needs.detect.outputs.python_dirs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.detect.outputs.python_dirs) }}
+    env:
+      TAILOR_INSTALL: ${{ fromJSON(needs.detect.outputs.python)[matrix.dir].install }}
+      TAILOR_LINT: ${{ fromJSON(needs.detect.outputs.python)[matrix.dir].lint }}
+      TAILOR_TYPES: ${{ fromJSON(needs.detect.outputs.python)[matrix.dir].types }}
+      TAILOR_TEST: ${{ fromJSON(needs.detect.outputs.python)[matrix.dir].test }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0  # Astral publishes full version tags only
+      - name: Install
+        run: |
+          ${{ env.TAILOR_INSTALL }}
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+      - name: Lint
+        if: ${{ !cancelled() && env.TAILOR_LINT != '' }}
+        run: ${{ env.TAILOR_LINT }}
+      - name: Type-check
+        if: ${{ !cancelled() && env.TAILOR_TYPES != '' }}
+        run: ${{ env.TAILOR_TYPES }}
+      - name: Test
+        if: ${{ !cancelled() && env.TAILOR_TEST != '' }}
+        run: ${{ env.TAILOR_TEST }}
+
+  terraform:
+    name: terraform
+    needs: detect
+    if: needs.detect.outputs.terraform != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ${{ fromJSON(needs.detect.outputs.terraform) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
