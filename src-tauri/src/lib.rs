@@ -1,4 +1,5 @@
 mod proxy;
+mod skills;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -1003,6 +1004,22 @@ fn dirs_next() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
 }
 
+#[tauri::command]
+async fn read_user_skills() -> Result<skills::SkillsResult, String> {
+    let home = dirs_next().ok_or_else(|| "HOME not set".to_string())?;
+    let claude_home = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    tauri::async_runtime::spawn_blocking(move || skills::discover(&home, &claude_home, &codex_home))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 // --- Preferences ---
 
 const DEFAULT_POLL_INTERVAL: u64 = 900_000;
@@ -1615,6 +1632,7 @@ pub fn run() {
             fetch_claude_usage,
             fetch_codex_usage,
             read_local_logs,
+            read_user_skills,
             read_codex_logs,
             open_logs_folder,
             set_tray_title,

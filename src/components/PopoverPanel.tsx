@@ -5,6 +5,7 @@ import { UsageLimitsBar } from "./UsageLimitsBar";
 import { ProxySwitch, ProxyToggle, ProxyMessage, useProxyToggleControl } from "./sections/ProxyToggle";
 import { WeekSection } from "./sections/WeekSection";
 import { Footer } from "./Footer";
+import { SkillsPanel } from "./SkillsPanel";
 import { SettingsPanel } from "./SettingsPanel";
 import { resizeWindow, openUrl } from "../lib/api";
 import tailorLogo from "../../src-tauri/icons/new-icon.png";
@@ -15,6 +16,8 @@ export function PopoverPanel() {
   const { refresh } = usePolling();
   const { loading, error, proxyStatus, updateInfo } = useStore();
   const { loading: proxyLoading, error: proxyError, showMessage, handleProxyToggle } = useProxyToggleControl();
+  const [activeTab, setActiveTab] = useState<"usage" | "skills">("usage");
+  const [skillsRefreshKey, setSkillsRefreshKey] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [mainContentHeight, setMainContentHeight] = useState<number | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -98,10 +101,25 @@ export function PopoverPanel() {
           </button>
         )}
 
+        <nav aria-label="Main views" className="flex gap-1 px-4 py-2 border-b border-gray-100">
+          {(["usage", "skills"] as const).map((tab) => (
+            <button
+              key={tab}
+              aria-pressed={!showSettings && activeTab === tab}
+              onClick={() => { setActiveTab(tab); setShowSettings(false); }}
+              className={`px-3 py-1.5 text-xs rounded-md cursor-pointer ${!showSettings && activeTab === tab ? "bg-gray-100 text-gray-900 font-medium" : "text-gray-500 hover:bg-gray-50"}`}
+            >
+              {tab === "usage" ? "Usage" : "Skills"}
+            </button>
+          ))}
+        </nav>
+
         {showSettings ? (
           <div className="border-t border-gray-100" style={mainContentHeight ? { minHeight: mainContentHeight } : {}}>
             <SettingsPanel onClose={() => setShowSettings(false)} />
           </div>
+        ) : activeTab === "skills" ? (
+          <SkillsPanel refreshKey={skillsRefreshKey} />
         ) : (
           <div ref={mainContentRef}>
             <UsageLimitsBar />
@@ -112,7 +130,10 @@ export function PopoverPanel() {
         )}
 
         <div className="border-t border-gray-100">
-          <Footer onRefresh={refresh} onSettings={() => {
+          <Footer onRefresh={async () => {
+            if (activeTab === "skills" && !showSettings) setSkillsRefreshKey((key) => key + 1);
+            else await refresh();
+          }} onSettings={() => {
             if (!showSettings && mainContentRef.current) {
               setMainContentHeight(mainContentRef.current.offsetHeight);
             }

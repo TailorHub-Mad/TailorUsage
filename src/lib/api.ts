@@ -133,3 +133,7 @@ export async function setHideFromDock(enabled: boolean): Promise<void> {
 export async function sendNotification(title: string, body: string): Promise<void> {
   return invoke("send_notification", { title, body });
 }
+
+export async function readUserSkills(): Promise<import("./types").SkillsResult> {
+  return invoke("read_user_skills");
+}
