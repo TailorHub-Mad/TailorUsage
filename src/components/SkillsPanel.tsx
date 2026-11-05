@@ -5,6 +5,9 @@ import type { SkillsResult } from "../lib/types";
 export function SkillsPanel({ refreshKey }: { refreshKey: number }) {
   const [result, setResult] = useState<SkillsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const filteredSkills = result?.skills.filter((skill) => skill.name.toLowerCase().includes(query)) ?? [];
 
   useEffect(() => {
     let active = true;
@@ -22,6 +25,14 @@ export function SkillsPanel({ refreshKey }: { refreshKey: number }) {
       <h2 className="text-sm font-semibold text-gray-900">User skills</h2>
       <p className="mt-1 text-gray-500">Personal Claude Code and Codex skills. Read-only.</p>
       <p className="mt-1 text-gray-400">Project and plugin skills are not included.</p>
+      <input
+        type="search"
+        aria-label="Search skills by name"
+        placeholder="Search skills by name…"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
       {!result && !error && <p role="status" className="py-6 text-gray-500">Loading skills…</p>}
       {error && <p role="alert" className="py-4 text-red-500">Could not load skills: {error}</p>}
       {result && (
@@ -32,12 +43,14 @@ export function SkillsPanel({ refreshKey }: { refreshKey: number }) {
               {result.warnings.map((warning, index) => <p key={index} className="mt-1">{warning}</p>)}
             </div>
           )}
-          <p className="mt-3 text-gray-500">{result.skills.length} enabled {result.skills.length === 1 ? "skill" : "skills"}</p>
+          <p className="mt-3 text-gray-500">{query ? `${filteredSkills.length} of ` : ""}{result.skills.length} enabled {result.skills.length === 1 ? "skill" : "skills"}</p>
           {result.skills.length === 0 ? (
             <p className="py-6 text-gray-500">{result.warnings.length ? "No skills could be listed." : "No enabled user skills found."}</p>
+          ) : filteredSkills.length === 0 ? (
+            <p role="status" className="py-6 text-gray-500">No skills match your search.</p>
           ) : (
             <ul aria-label="Enabled user skills" className="mt-2 max-h-80 overflow-y-auto divide-y divide-gray-100">
-              {result.skills.map((skill) => (
+              {filteredSkills.map((skill) => (
                 <li key={`${skill.provider}:${skill.path}`} className="py-3">
                   <div className="flex items-start justify-between gap-2">
                     <span className="font-medium text-gray-900 break-words min-w-0">{skill.name}</span>
