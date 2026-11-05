@@ -117,3 +117,15 @@ export interface UpdateInfo {
   latest_version: string;
   download_url: string;
 }
+
+export interface UserSkill {
+  name: string;
+  description: string;
+  provider: string;
+  path: string;
+}
+
+export interface SkillsResult {
+  skills: UserSkill[];
+  warnings: string[];
+}
