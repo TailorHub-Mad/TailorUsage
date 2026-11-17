@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   getProxyEnabled: vi.fn(),
   verifyProxyConfig: vi.fn(),
   setTrayTitle: vi.fn(),
+  sendNotification: vi.fn(),
   forwardLogsToDashboard: vi.fn(),
 }));
 
@@ -623,5 +624,84 @@ describe("usePolling", () => {
 
     expect(useStore.getState().weekLogs.every((log) => log.developer_id === "dev-a")).toBe(true);
     expect(useStore.getState().weekLogs.every((log) => log.repo === "tailor-bar")).toBe(true);
+  });
+});
+
+describe("usage notifications", () => {
+  beforeEach(() => {
+    resetStore();
+    vi.resetAllMocks();
+    apiMocks.sendNotification.mockResolvedValue(undefined);
+    apiMocks.readLocalLogs.mockResolvedValue([]);
+    apiMocks.readCodexLogs.mockResolvedValue({ status: "ok", detail: null, logs: [] });
+    apiMocks.fetchMetrics.mockResolvedValue({ metrics: [] });
+    apiMocks.fetchUsage.mockResolvedValue({ data: [] });
+    apiMocks.getProxyEnabled.mockResolvedValue(false);
+    apiMocks.verifyProxyConfig.mockResolvedValue({ ok: true, failures: [] });
+    apiMocks.forwardLogsToDashboard.mockResolvedValue(0);
+  });
+
+  const windows = [
+    { label: "Claude session", provider: "claude", window: "five_hour" },
+    { label: "Claude weekly", provider: "claude", window: "seven_day" },
+    { label: "OpenAI session", provider: "openai", window: "primary_window" },
+    { label: "OpenAI weekly", provider: "openai", window: "secondary_window" },
+  ] as const;
+
+  describe.each(windows)("$label", ({ label, provider, window }) => {
+    function mockUsage(percent: number) {
+      apiMocks.fetchClaudeUsage.mockResolvedValue(provider === "claude"
+        ? { [window]: { utilization: percent, resets_at: "2026-12-01T00:00:00Z" } }
+        : null);
+      apiMocks.fetchCodexUsage.mockResolvedValue(provider === "openai"
+        ? { rate_limit: { [window]: { used_percent: percent, reset_at: 1796083200, limit_window_seconds: 18000 } } }
+        : null);
+    }
+
+    it.each([60, 70, 80, 90])("rounds, suppresses duplicates, and rearms at %i%%", async (threshold) => {
+      useStore.getState().setPreferences({
+        ...useStore.getState().preferences,
+        notification_threshold: threshold,
+      });
+      mockUsage(threshold - 0.6);
+      const { result } = renderHook(() => usePolling());
+      await waitFor(() => expect(useStore.getState().loading).toBe(false));
+      expect(useStore.getState().error).toBeNull();
+      expect(apiMocks.sendNotification).not.toHaveBeenCalled();
+
+      async function refreshAt(percent: number) {
+        mockUsage(percent);
+        await act(async () => { await result.current.refresh(); });
+        expect(useStore.getState().error).toBeNull();
+      }
+
+      await refreshAt(threshold - 0.5);
+      expect(apiMocks.sendNotification).toHaveBeenCalledExactlyOnceWith(
+        "TailorUsage", `${label} usage is at ${threshold}%`,
+      );
+
+      await refreshAt(threshold);
+      await refreshAt(threshold + 5);
+      await refreshAt(threshold - 0.5);
+      expect(apiMocks.sendNotification).toHaveBeenCalledTimes(1);
+
+      await refreshAt(threshold - 0.6);
+      expect(apiMocks.sendNotification).toHaveBeenCalledTimes(1);
+      await refreshAt(threshold);
+      expect(apiMocks.sendNotification).toHaveBeenCalledTimes(2);
+      expect(apiMocks.sendNotification).toHaveBeenLastCalledWith(
+        "TailorUsage", `${label} usage is at ${threshold}%`,
+      );
+    });
+
+    it("does not notify when Off, even at 100%", async () => {
+      mockUsage(100);
+      const { result } = renderHook(() => usePolling());
+      await waitFor(() => expect(useStore.getState().loading).toBe(false));
+      await act(async () => { await result.current.refresh(); });
+
+      expect(useStore.getState().error).toBeNull();
+      expect(apiMocks.sendNotification).not.toHaveBeenCalled();
+    });
   });
 });

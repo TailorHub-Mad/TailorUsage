@@ -30,6 +30,44 @@ describe("SettingsPanel", () => {
     });
   });
 
+  it("shows the ordered notification choices with Off selected by default", () => {
+    render(<SettingsPanel onClose={vi.fn()} />);
+
+    expect(screen.getAllByRole("button", { name: /^(Off|\d+%)$/ }).map((button) => button.textContent))
+      .toEqual(["Off", "60%", "70%", "80%", "90%"]);
+    expect(screen.getByRole("button", { name: "Off" })).toHaveClass("bg-gray-100");
+  });
+
+  it("selects and saves 60%, then switches back to Off without changing other preferences", async () => {
+    const originalPreferences = useStore.getState().preferences;
+    render(<SettingsPanel onClose={vi.fn()} />);
+
+    for (const [label, threshold] of [["60%", 60], ["Off", null]] as const) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      const expected = { ...originalPreferences, notification_threshold: threshold };
+      await waitFor(() => {
+        expect(apiMocks.setPreferences).toHaveBeenLastCalledWith(expected);
+      });
+      expect(useStore.getState().preferences).toEqual(expected);
+      expect(screen.getByRole("button", { name: label })).toHaveClass("bg-gray-100");
+      expect(screen.getByRole("button", { name: threshold === null ? "60%" : "Off" }))
+        .not.toHaveClass("bg-gray-100");
+    }
+  });
+
+  it.each([60, 70, 80, 90])("highlights a restored %i%% preference", (threshold) => {
+    useStore.getState().setPreferences({
+      ...useStore.getState().preferences,
+      notification_threshold: threshold,
+    });
+    render(<SettingsPanel onClose={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: `${threshold}%` })).toHaveClass("bg-gray-100");
+    expect(screen.getByRole("button", { name: "Off" })).not.toHaveClass("bg-gray-100");
+    expect(apiMocks.setPreferences).not.toHaveBeenCalled();
+  });
+
   it("hides a provider and moves the tray source to the remaining provider", async () => {
     render(<SettingsPanel onClose={vi.fn()} />);
 

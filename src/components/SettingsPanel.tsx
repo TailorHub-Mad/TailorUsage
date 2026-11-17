@@ -18,6 +18,7 @@ const PROVIDER_OPTIONS: { label: string; value: ProviderId }[] = [
 
 const NOTIFICATION_THRESHOLD_OPTIONS: { label: string; value: number | null }[] = [
   { label: "Off", value: null },
+  { label: "60%", value: 60 },
   { label: "70%", value: 70 },
   { label: "80%", value: 80 },
   { label: "90%", value: 90 },
@@ -178,7 +179,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
               <button
                 key={String(opt.value)}
                 onClick={() => updatePrefs({ notification_threshold: opt.value })}
-                className={`px-3 py-1.5 text-xs rounded-md transition-colors cursor-pointer ${
+                className={`px-2 py-1.5 text-xs rounded-md transition-colors cursor-pointer ${
                   preferences.notification_threshold === opt.value
                     ? "bg-gray-100 text-gray-700 font-medium"
                     : "text-gray-400 hover:text-gray-600"
